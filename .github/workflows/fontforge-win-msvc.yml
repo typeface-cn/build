@@ -33,14 +33,12 @@ jobs:
       - name: Create vcpkg cache directory
         run: New-Item -ItemType Directory -Force -Path vcpkg-cache
 
-      # 🔥 关键：安装编译必需的 gettext + pkgconf (Windows版pkg-config)
-      - name: Install build dependencies (gettext, pkgconf)
+      # 用Choco安装系统级 pkg-config + gettext（100%兼容，无路径错误）
+      - name: Install PkgConfig & Gettext (Chocolatey)
         run: |
-          vcpkg install gettext:x64-windows pkgconf:x64-windows
-          # 将vcpkg工具目录加入系统PATH
-          echo "$env:VCPKG_ROOT\installed\x64-windows\tools\gettext\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          echo "$env:VCPKG_ROOT\installed\x64-windows\tools\pkgconf" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
+          choco install pkgconfiglite -y
+          choco install gettext -y
+          refreshenv
 
       # 配置 vcpkg（官方源码路径）
       - name: Setup vcpkg
@@ -75,8 +73,7 @@ jobs:
             -DENABLE_LIBSPIRO=ON `
             -DENABLE_WOFF2=ON `
             -DENABLE_DOCS=OFF `
-            -DBUILD_SHARED_LIBS=ON `
-            -DPKG_CONFIG_EXECUTABLE="$env:VCPKG_ROOT/installed/x64-windows/tools/pkgconf/pkgconf.exe"
+            -DBUILD_SHARED_LIBS=ON
 
       - name: Build FontForge
         run: |
