@@ -86,7 +86,8 @@ jobs:
           # 下载时显示的名字
           name: FontForge-Windows-MSVC-Build
           # 上传编译好的所有 exe/dll 文件
-          path: fontforge/build/bin/
+          path: 
+              fontforge/build/
           if-no-files-found: error
 
       # 保存缓存
