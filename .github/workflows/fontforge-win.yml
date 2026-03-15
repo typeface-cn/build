@@ -1,4 +1,4 @@
-name: CI
+name: Build FontForge for Windows
 on:
   push:
     branches: [ master, releases/** ]
