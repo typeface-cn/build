@@ -42,7 +42,7 @@ jobs:
       #安装 Windows 兼容的 pkgconf + gettext（全依赖补齐）
       - name: Install full dependencies
         run: |
-          vcpkg install pkgconf:x64-windows gettext:x64-windows
+          vcpkg install pkgconf:x64-windows gettext:x64-windows glib:x64-windows
           # 将vcpkg工具加入系统PATH
           echo "$env:VCPKG_ROOT\installed\x64-windows\tools\pkgconf" | Out-File -FilePath $env:GITHUB_PATH -Append
           echo "$env:VCPKG_ROOT\installed\x64-windows\tools\gettext\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
