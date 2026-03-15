@@ -60,11 +60,11 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
             -DCMAKE_BUILD_TYPE=Release `
             -DPython3_EXECUTABLE="$pythonExe" `
-            -DENABLE_GUI=OFF `
+            -DENABLE_GUI=ON `
             -DENABLE_PYTHON_SCRIPTING=ON `
             -DENABLE_PYTHON_EXTENSION=ON `
-            -DENABLE_LIBSPIRO=OFF `
-            -DENABLE_WOFF2=OFF `
+            -DENABLE_LIBSPIRO=ON `
+            -DENABLE_WOFF2=ON `
             -DENABLE_DOCS=OFF `
             -DBUILD_SHARED_LIBS=ON
 
