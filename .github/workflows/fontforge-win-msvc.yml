@@ -39,9 +39,14 @@ jobs:
         with:
           vcpkgJsonGlob: 'fontforge/vcpkg.json'
 
-      # vcpkg 自动安装 gettext（包含 libintl 开发库 + pkg-config + 工具）
-      - name: Install vcpkg dependencies
-        run: vcpkg install gettext:x64-windows
+      #安装 Windows 兼容的 pkgconf + gettext（全依赖补齐）
+      - name: Install full dependencies
+        run: |
+          vcpkg install pkgconf:x64-windows gettext:x64-windows
+          # 将vcpkg工具加入系统PATH
+          echo "$env:VCPKG_ROOT\installed\x64-windows\tools\pkgconf" | Out-File -FilePath $env:GITHUB_PATH -Append
+          echo "$env:VCPKG_ROOT\installed\x64-windows\tools\gettext\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
 
       # 初始化 MSVC x64 环境
       - name: Setup MSVC
@@ -70,8 +75,7 @@ jobs:
             -DENABLE_LIBSPIRO=ON `
             -DENABLE_WOFF2=ON `
             -DENABLE_DOCS=OFF `
-            -DBUILD_SHARED_LIBS=ON `
-            -DWITH_PKGCONFIG=OFF
+            -DBUILD_SHARED_LIBS=ON
 
       - name: Build FontForge
         run: |
