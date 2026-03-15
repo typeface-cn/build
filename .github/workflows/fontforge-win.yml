@@ -67,6 +67,7 @@ jobs:
         id: vcpkg-cache
         uses: actions/cache/restore@v4
         with:
+          repository: fontforge/fontforg
           path: vcpkg-cache
           key: vcpkg-files-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
           restore-keys: |
@@ -112,5 +113,6 @@ jobs:
         if: always()
         uses: actions/cache/save@v4
         with:
+          repository: fontforge/fontforg
           path: vcpkg-cache
           key: vcpkg-files-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
