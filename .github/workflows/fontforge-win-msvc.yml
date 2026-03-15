@@ -36,8 +36,9 @@ jobs:
       # 用Choco安装系统级 pkg-config + gettext（100%兼容，无路径错误）
       - name: Install PkgConfig & Gettext (Chocolatey)
         run: |
-          choco install pkgconfiglite -y
-          choco install gettext -y
+          choco install pkgconfiglite gettext -y
+          # 强制把Gettext工具目录加入PATH（核心修复）
+          echo "C:\Program Files (x86)\GnuWin32\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           refreshenv
 
       # 配置 vcpkg（官方源码路径）
@@ -73,7 +74,9 @@ jobs:
             -DENABLE_LIBSPIRO=ON `
             -DENABLE_WOFF2=ON `
             -DENABLE_DOCS=OFF `
-            -DBUILD_SHARED_LIBS=ON
+            -DBUILD_SHARED_LIBS=ON ·
+            -DGETTEXT_MSGMERGE_EXECUTABLE="C:\Program Files (x86)\GnuWin32\bin\msgmerge.exe" `
+            -DGETTEXT_MSGFMT_EXECUTABLE="C:\Program Files (x86)\GnuWin32\bin\msgfmt.exe"
 
       - name: Build FontForge
         run: |
