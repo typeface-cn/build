@@ -75,7 +75,9 @@ jobs:
             -DENABLE_LIBSPIRO=ON `
             -DENABLE_WOFF2=ON `
             -DENABLE_DOCS=OFF `
-            -DBUILD_SHARED_LIBS=ON
+            -DBUILD_SHARED_LIBS=ON `
+            -DGETTEXT_MSGMERGE_EXECUTABLE="$gettextBin\msgmerge.exe" `
+            -DGETTEXT_MSGFMT_EXECUTABLE="$gettextBin\msgfmt.exe"
 
       - name: Build FontForge
         run: |
