@@ -66,7 +66,8 @@ jobs:
             -DENABLE_LIBSPIRO=ON `
             -DENABLE_WOFF2=ON `
             -DENABLE_DOCS=OFF `
-            -DBUILD_SHARED_LIBS=ON
+            -DBUILD_SHARED_LIBS=ON `
+            -DCMAKE_DISABLE_FIND_PACKAGE_PkgConfig=TRUE
 
       - name: Build FontForge
         run: |
