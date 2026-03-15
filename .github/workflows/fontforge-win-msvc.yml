@@ -61,6 +61,27 @@ jobs:
         with:
           python-version: '3.14'
 
+      - name: Patch FontForge CMake to bypass GLIB check
+        run: |
+          cd fontforge
+          # 读取 FindGLIB.cmake
+          $content = Get-Content "cmake/packages/FindGLIB.cmake" -Raw
+          
+          # 🔥 暴力修改：在文件开头直接强制设定我们需要的所有变量
+          $patch = @"
+          # --------------- PATCH START ---------------
+          set(GLIB_INCLUDE_DIRS "$env:VCPKG_ROOT/installed/x64-windows/include/glib-2.0;$env:VCPKG_ROOT/installed/x64-windows/lib/glib-2.0/include")
+          set(GLIB_LIBRARIES "$env:VCPKG_ROOT/installed/x64-windows/lib/glib-2.0.lib")
+          set(GLIB_GIO_LIBRARIES "$env:VCPKG_ROOT/installed/x64-windows/lib/gio-2.0.lib")
+          set(GLIB_GOBJECT_LIBRARIES "$env:VCPKG_ROOT/installed/x64-windows/lib/gobject-2.0.lib")
+          set(GLIB_VERSION_OK TRUE)
+          set(GLIB_FOUND TRUE)
+          # --------------- PATCH END -----------------
+          "@
+          
+          # 将补丁写入文件开头
+          $patch + $content | Set-Content "cmake/packages/FindGLIB.cmake"
+
       # 进入源码目录编译（核心！）
       - name: Configure CMake
         run: |
