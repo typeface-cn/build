@@ -1,60 +1,61 @@
 name: Build FontForge with MSVC for Windows
 on:
   push:
-    branches: [ master, releases/** ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ master ]
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
   windows-msvc:
     runs-on: windows-latest
     env:
-      # 配置 vcpkg 二进制缓存源（关键优化）
       VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-cache,readwrite"
     steps:
-      - name: Checkout source code
+      # 🔥 关键修改：拉取 官方FontForge 源码（你的仓库不用放源码）
+      - name: Checkout FontForge official source
         uses: actions/checkout@v4
+        with:
+          repository: fontforge/fontforge
+          ref: master
+          path: fontforge
 
-      # 恢复 vcpkg 缓存（修复路径拼写错误）
+      # 恢复 vcpkg 缓存
       - name: Restore vcpkg binary cache
         id: vcpkg-cache
         uses: actions/cache/restore@v4
         with:
           path: vcpkg-cache
-          # 修正：fontforg → fontforge，正确的 vcpkg.json 路径
           key: vcpkg-files-${{ runner.os }}-${{ hashFiles('fontforge/vcpkg.json') }}
           restore-keys: |
             vcpkg-files-${{ runner.os }}-
 
-      # 创建缓存目录（幂等操作，避免目录不存在报错）
       - name: Create vcpkg cache directory
         run: New-Item -ItemType Directory -Force -Path vcpkg-cache
 
-      # 配置 vcpkg（修复路径错误）
+      # 配置 vcpkg（官方源码路径）
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgJsonGlob: 'fontforge/vcpkg.json'
 
-      # 初始化 MSVC 编译环境（x64 架构）
-      - name: Setup MSVC Developer Command Prompt
+      # 初始化 MSVC x64 环境
+      - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
-      # 配置 Python 环境
-      - name: Setup Python 3.11
+      # 配置 Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # CMake 配置（NMake Makefiles + vcpkg 工具链）
-      - name: Configure CMake project
+      # 进入源码目录编译（核心！）
+      - name: Configure CMake
         run: |
+          cd fontforge
           $pythonExe = (Get-Command python).Source
-          Write-Host "Using Python executable: $pythonExe"
-          
           cmake -B build -G "NMake Makefiles" `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
             -DCMAKE_BUILD_TYPE=Release `
@@ -67,21 +68,19 @@ jobs:
             -DENABLE_DOCS=OFF `
             -DBUILD_SHARED_LIBS=ON
 
-      # 编译项目
       - name: Build FontForge
-        run: cmake --build build
+        run: |
+          cd fontforge
+          cmake --build build
 
-      # 运行 Python 钩子测试（补全依赖 DLL，避免加载失败）
       - name: Run pyhook tests
         run: |
-          # 复制编译产物 DLL 到 Python 模块目录
-          Copy-Item -Path build\bin\*.dll -Destination build\lib\ -Force
-          # 复制 vcpkg 依赖的系统 DLL（容错：忽略文件不存在的错误）
-          Copy-Item -Path build\vcpkg_installed\x64-windows\bin\*.dll -Destination build\lib\ -Force -ErrorAction SilentlyContinue
-          # 运行测试
+          cd fontforge
+          Copy-Item build\bin\*.dll build\lib\ -Force
+          Copy-Item build\vcpkg_installed\x64-windows\bin\*.dll build\lib\ -Force -ErrorAction SilentlyContinue
           ctest --test-dir build -R "_pyhook" --output-on-failure
 
-      # 保存 vcpkg 缓存（无论编译成功/失败都保存，加速下次构建）
+      # 保存缓存
       - name: Save vcpkg binary cache
         if: always()
         uses: actions/cache/save@v4
