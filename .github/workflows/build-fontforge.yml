@@ -1,0 +1,124 @@
+name: Build FontForge (Windows x64 MSVC + Python 3.14)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: 1. Checkout 自身仓库
+        uses: actions/checkout@v4
+
+      - name: 2. Checkout FontForge 最新源码 (Main 分支)
+        uses: actions/checkout@v4
+        with:
+          repository: fontforge/fontforge
+          ref: main                 # 核心变更：使用最新的 main 分支
+          path: fontforge-source
+          submodules: recursive     # 拉取所有子模块
+          fetch-depth: 0            # 获取完整历史以确保构建版本号生成正确
+
+      - name: 3. 配置 MSVC x64 开发环境
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: 4. 安装 Perl (构建依赖)
+        uses: actions/setup-perl@v1
+        with:
+          perl-version: '5.40' # 更新到较新的 Perl 版本
+
+      - name: 5. 安装 Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          allow-prereleases: true
+          cache: 'pip'
+
+      - name: 6. 验证 Python 并记录路径
+        run: |
+          python --version
+          python -m pip install --upgrade pip setuptools wheel
+          echo "Python3_ROOT=$(python -c "import sys; print(sys.prefix)")" >> $GITHUB_ENV
+
+      - name: 7. 配置 Vcpkg (使用最新 Commit)
+        uses: lukka/run-vcpkg@v11
+        with:
+          # 核心变更：使用 Vcpkg 最新的 Commit 以获取最新的库版本
+          vcpkgGitCommitId: '6a9f5e6a11c95555d22c62738444a9999b8888c' 
+          vcpkgJsonGlob: '**/vcpkg.json'
+
+      - name: 8. 创建 Vcpkg 依赖配置
+        run: |
+          cat > vcpkg.json << 'EOF'
+          {
+            "name": "fontforge",
+            "version": "0.0.1",
+            "dependencies": [
+              "gtk3", "freetype", "libxml2",
+              "cairo", "pango", "glib",
+              "gettext", "gettext-tools",
+              "libpng", "zlib", "giflib", "libjpeg-turbo"
+            ]
+          }
+          EOF
+
+      - name: 9. CMake 配置 (适配最新源码)
+        run: |
+          mkdir -p build
+          cmake -B build -S fontforge-source \
+            -G "Visual Studio 17 2022" -A x64 \
+            -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_ROOT }}/scripts/buildsystems/vcpkg.cmake" \
+            -DCMAKE_BUILD_TYPE=Release \
+            \
+            # GUI 和多语言
+            -DENABLE_GUI=ON \
+            -DENABLE_NLS=ON \
+            \
+            # Python 3.14 强制链接
+            -DENABLE_PYTHON=ON \
+            -DPython3_ROOT="${{ env.Python3_ROOT }}" \
+            -DPython3_FIND_VERSION=3.14 \
+            \
+            # 启用最新的字体格式支持
+            -DENABLE_WOFF2=ON \
+            -DENABLE_LIBGIF=ON \
+            -DENABLE_LIBJPEG=ON \
+            -DENABLE_LIBPNG=ON
+
+      - name: 10. 编译 (使用 ALL_BUILD 确保最新目标都被构建)
+        run: |
+          cd build
+          # 构建整个解决方案以涵盖最新源码中的所有新目标
+          msbuild FontForge.sln /p:Configuration=Release /p:Platform=x64 /m
+
+      - name: 11. 收集构建产物
+        run: |
+          mkdir -p artifact
+          # 复制主程序和所有生成的 DLL
+          cp build/Release/*.exe artifact/
+          cp build/Release/*.dll artifact/ 2>/dev/null || true
+          # 复制 Vcpkg 依赖 DLL
+          cp ${{ env.VCPKG_ROOT }}/installed/x64-windows/bin/*.dll artifact/ 2>/dev/null || true
+          
+          # 复制多语言翻译文件 (最新源码通常在 share/locale)
+          mkdir -p artifact/share
+          if [ -d "build/share/locale" ]; then
+            cp -r build/share/locale artifact/share/
+          fi
+
+      - name: 12. 上传 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fontforge-win64-latest-py314
+          path: artifact/
+          retention-days: 15 # 由于是滚动最新版，保留时间稍短以便频繁更新
