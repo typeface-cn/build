@@ -33,17 +33,17 @@ jobs:
       - name: Create vcpkg cache directory
         run: New-Item -ItemType Directory -Force -Path vcpkg-cache
 
-      # vcpkg 自动安装 gettext（包含 libintl 开发库 + pkg-config + 工具）
-      - name: Install vcpkg dependencies
-        run: |
-          vcpkg install gettext:x64-windows
-          vcpkg integrate install
-
       # 配置 vcpkg（官方源码路径）
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgJsonGlob: 'fontforge/vcpkg.json'
+
+      # vcpkg 自动安装 gettext（包含 libintl 开发库 + pkg-config + 工具）
+      - name: Install vcpkg dependencies
+        run: |
+          vcpkg install gettext:x64-windows
+          vcpkg integrate install
 
       # 初始化 MSVC x64 环境
       - name: Setup MSVC
