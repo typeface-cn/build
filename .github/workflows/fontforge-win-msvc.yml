@@ -1,4 +1,4 @@
-name: Build FontForge for Windows
+name: Build FontForge with msvc for Windows
 on:
   push:
     branches: [ master, releases/** ]
