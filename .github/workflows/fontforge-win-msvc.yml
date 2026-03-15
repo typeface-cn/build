@@ -66,6 +66,9 @@ jobs:
           cd fontforge
           $pythonExe = (Get-Command python).Source
           $vcpkgInstalled = "$env:VCPKG_ROOT\installed\x64-windows"
+          $glibInc = "$vcpkgInstalled\include\glib-2.0"
+          $glibLib = "$vcpkgInstalled\lib"
+          $glibConfigInc = "$vcpkgInstalled\lib\glib-2.0\include"
           cmake -B build -G "NMake Makefiles" `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
             -DCMAKE_BUILD_TYPE=Release `
@@ -74,6 +77,11 @@ jobs:
             -DIntl_LIBRARY="$vcpkgInstalled/lib/intl.lib" `
             -DGETTEXT_MSGMERGE_EXECUTABLE="$vcpkgInstalled/tools/gettext/bin/msgmerge.exe" `
             -DGETTEXT_MSGFMT_EXECUTABLE="$vcpkgInstalled/tools/gettext/bin/msgfmt.exe" `
+            -DGLIB_INCLUDE_DIRS="$glibInc;$glibConfigInc" `
+            -DGLIB_LIBRARIES="$glibLib/glib-2.0.lib" `
+            -DGLIB_GIO_LIBRARIES="$glibLib/gio-2.0.lib" `
+            -DGLIB_GOBJECT_LIBRARIES="$glibLib/gobject-2.0.lib" `
+            -DGLIB_VERSION_OK=TRUE `
             -DENABLE_GUI=ON `
             -DENABLE_PYTHON_SCRIPTING=ON `
             -DENABLE_PYTHON_EXTENSION=ON `
