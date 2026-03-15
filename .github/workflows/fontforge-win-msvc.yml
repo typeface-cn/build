@@ -33,11 +33,11 @@ jobs:
       - name: Create vcpkg cache directory
         run: New-Item -ItemType Directory -Force -Path vcpkg-cache
 
-      # 用Choco安装系统级 pkg-config + gettext（100%兼容，无路径错误）
-      - name: Install PkgConfig & Gettext (Chocolatey)
+      # vcpkg 自动安装 gettext（包含 libintl 开发库 + pkg-config + 工具）
+      - name: Install vcpkg dependencies
         run: |
-          choco install pkgconfiglite gettext-iconv -y
-          refreshenv
+          vcpkg install gettext:x64-windows
+          vcpkg integrate install
 
       # 配置 vcpkg（官方源码路径）
       - name: Setup vcpkg
@@ -72,9 +72,7 @@ jobs:
             -DENABLE_LIBSPIRO=ON `
             -DENABLE_WOFF2=ON `
             -DENABLE_DOCS=OFF `
-            -DBUILD_SHARED_LIBS=ON `
-            -DGETTEXT_MSGMERGE_EXECUTABLE="C:\Program Files\gettext-iconv\bin\msgmerge.exe" `
-            -DGETTEXT_MSGFMT_EXECUTABLE="C:\Program Files\gettext-iconv\bin\msgfmt.exe"
+            -DBUILD_SHARED_LIBS=ON
 
       - name: Build FontForge
         run: |
