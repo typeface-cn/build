@@ -92,9 +92,9 @@ jobs:
           # 删除压缩包
           Remove-Item -Path python-embed.zip -Force
           # 移动 python314.dll 到 bin 目录
-          Move-Item -Path build/lib/python314.dll -Destination build/bin/ -Force -ErrorAction SilentlyContinue
+          Move-Item -Path build/bin/Lib/python314.dll -Destination build/bin/ -Force -ErrorAction SilentlyContinue
           # 移动 python314.zip 到 bin 目录
-          Move-Item -Path build/lib/python314.zip -Destination build/bin/ -Force -ErrorAction SilentlyContinue
+          Move-Item -Path build/bin/Lib/python314.zip -Destination build/bin/ -Force -ErrorAction SilentlyContinue
         
       - name: Upload FontForge Build Artifacts
         uses: actions/upload-artifact@v4
