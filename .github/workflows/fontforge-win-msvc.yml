@@ -80,6 +80,15 @@ jobs:
           Copy-Item build\vcpkg_installed\x64-windows\bin\*.dll build\lib\ -Force -ErrorAction SilentlyContinue
           ctest --test-dir build -R "_pyhook" --output-on-failure
 
+      - name: Upload FontForge Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          # 下载时显示的名字
+          name: FontForge-Windows-MSVC-Build
+          # 上传编译好的所有 exe/dll 文件
+          path: fontforge/build/bin/
+          if-no-files-found: error
+
       # 保存缓存
       - name: Save vcpkg binary cache
         if: always()
