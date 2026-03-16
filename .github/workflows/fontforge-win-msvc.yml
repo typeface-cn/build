@@ -154,8 +154,23 @@ jobs:
             exit 1
           }
           
-          # 保存 pkg-config 路径供后续步骤使用
-          "PKG_CONFIG_EXECUTABLE=$pkgConfigExe" | Out-File -FilePath "$env:GITHUB_WORKSPACE\pkg-config-path.txt" -Encoding UTF8
+          # 🔥 直接设置环境变量 (不要保存到文件)
+          "PKG_CONFIG_EXECUTABLE=$pkgConfigExe" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
+          Write-Host "Set PKG_CONFIG_EXECUTABLE=$pkgConfigExe"
+          
+          # 设置 PKG_CONFIG_PATH
+          $pkgConfigPath = "$installRoot\x64-windows\lib\pkgconfig;$installRoot\x64-windows\share\pkgconfig"
+          "PKG_CONFIG_PATH=$pkgConfigPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
+          Write-Host "Set PKG_CONFIG_PATH=$pkgConfigPath"
+          
+          # 将 pkgconf 目录添加到 PATH
+          $pkgConfigDir = Split-Path $pkgConfigExe -Parent
+          $pkgConfigDir | Out-File -FilePath $env:GITHUB_PATH -Encoding UTF8 -Append
+          Write-Host "Added to PATH: $pkgConfigDir"
+          
+          # 测试 pkg-config
+          Write-Host "=== Testing pkg-config ==="
+          & $pkgConfigExe --version
           
           # 步骤 2: 再用 manifest 模式安装其他依赖
           Write-Host "=== Step 2: Installing other dependencies (manifest mode) ==="
@@ -167,41 +182,6 @@ jobs:
             --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite"
           
           Write-Host "=== All dependencies installed ==="
-        shell: pwsh
-
-      # 🔥 设置 pkg-config 环境变量 (在 CMake 配置之前)
-      - name: Setup pkg-config environment
-        run: |
-          Write-Host "=== Setting up pkg-config ==="
-          
-          # 读取之前保存的 pkg-config 路径
-          $pkgConfigExe = Get-Content "$env:GITHUB_WORKSPACE\pkg-config-path.txt"
-          $vcpkgInstalled = "$env:GITHUB_WORKSPACE\fontforge\build\vcpkg_installed\x64-windows"
-          
-          Write-Host "pkg-config: $pkgConfigExe"
-          Write-Host "vcpkg_installed: $vcpkgInstalled"
-          
-          if (-not (Test-Path $pkgConfigExe)) {
-            Write-Host "::error::pkg-config not found at saved path!"
-            exit 1
-          }
-          
-          "PKG_CONFIG_EXECUTABLE=$pkgConfigExe" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
-          
-          # 设置 PKG_CONFIG_PATH
-          $pkgConfigPath = "$vcpkgInstalled\lib\pkgconfig;$vcpkgInstalled\share\pkgconfig"
-          "PKG_CONFIG_PATH=$pkgConfigPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
-          
-          # 将 pkgconf 目录添加到 PATH
-          $pkgConfigDir = Split-Path $pkgConfigExe -Parent
-          $pkgConfigDir | Out-File -FilePath $env:GITHUB_PATH -Encoding UTF8 -Append
-          
-          Write-Host "PKG_CONFIG_EXECUTABLE: $pkgConfigExe"
-          Write-Host "PKG_CONFIG_PATH: $pkgConfigPath"
-          
-          # 测试 pkg-config
-          Write-Host "=== Testing pkg-config ==="
-          & $pkgConfigExe --version
         shell: pwsh
 
       # 🔥 CMake 配置 (依赖已预先安装)
@@ -221,6 +201,7 @@ jobs:
           Write-Host "VCPKG_ROOT: $env:VCPKG_ROOT"
           Write-Host "VCPKG_INSTALLED_DIR: $vcpkgInstalled"
           Write-Host "PKG_CONFIG_EXECUTABLE: $env:PKG_CONFIG_EXECUTABLE"
+          Write-Host "PKG_CONFIG_PATH: $env:PKG_CONFIG_PATH"
           Write-Host "PYTHON_EXECUTABLE: $env:PYTHON_EXECUTABLE"
           
           # 验证所有工具
