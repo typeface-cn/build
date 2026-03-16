@@ -41,7 +41,7 @@ jobs:
         with:
           vcpkgJsonGlob: 'fontforge/vcpkg.json'
 
-      # 🔥 从 MSYS2 安装 Gettext 工具 (关键修复)
+      # 🔥 从 MSYS2 安装 Gettext 工具
       - name: Install Gettext tools from MSYS2
         run: |
           Write-Host "Installing gettext tools from MSYS2..."
@@ -69,6 +69,15 @@ jobs:
         with:
           python-version: '3.12'
 
+      # 🔥 获取 Python 路径并设置环境变量
+      - name: Get Python executable path
+        id: python-path
+        run: |
+          $pythonExe = (Get-Command python).Source
+          Write-Host "Python executable: $pythonExe"
+          echo "PYTHON_EXECUTABLE=$pythonExe" >> $env:GITHUB_ENV
+        shell: pwsh
+
       # 设置 pkg-config 环境变量
       - name: Setup pkg-config environment
         run: |
@@ -78,15 +87,22 @@ jobs:
           echo "PKG_CONFIG_PATH=$pkgConfigPath" >> $env:GITHUB_ENV
         shell: pwsh
 
-      # 🔥 CMake 配置 - 显式传递 Gettext 路径
+      # 🔥 CMake 配置 - 使用环境变量传递 Python 路径
       - name: Configure CMake
         run: |
           cd fontforge
           
-          Write-Host "=== Gettext Configuration ==="
+          Write-Host "=== Configuration ==="
+          Write-Host "Python: $env:PYTHON_EXECUTABLE"
           Write-Host "MSGMERGE: $env:GETTEXT_MSGMERGE_EXECUTABLE"
           Write-Host "MSGFMT: $env:GETTEXT_MSGFMT_EXECUTABLE"
+          Write-Host "PKG_CONFIG: $env:PKG_CONFIG_EXECUTABLE"
           
+          # 验证所有工具
+          if (-not (Test-Path $env:PYTHON_EXECUTABLE)) {
+            Write-Host "::error::Python executable not found!"
+            exit 1
+          }
           if (-not (Test-Path $env:GETTEXT_MSGMERGE_EXECUTABLE)) {
             Write-Host "::error::msgmerge.exe not found!"
             exit 1
@@ -96,10 +112,11 @@ jobs:
             exit 1
           }
           
-          cmake -B build -G "Ninja" `
+          cmake -B build `
+            -G "Ninja" `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
             -DCMAKE_BUILD_TYPE=Release `
-            -DPython3_EXECUTABLE=(Get-Command python).Source `
+            -DPython3_EXECUTABLE="$env:PYTHON_EXECUTABLE" `
             -DENABLE_GUI=ON `
             -DENABLE_PYTHON_SCRIPTING=ON `
             -DENABLE_PYTHON_EXTENSION=ON `
