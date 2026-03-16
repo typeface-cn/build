@@ -35,65 +35,26 @@ jobs:
       - name: Create vcpkg cache directory
         run: New-Item -ItemType Directory -Force -Path vcpkg-cache
 
-      # 🔥 配置 vcpkg
+      # 🔥 配置 vcpkg (仅用于库依赖)
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgJsonGlob: 'fontforge/vcpkg.json'
 
-      # 🔥 关键修复：显式安装 gettext 并检测可执行文件
-      - name: Install and locate Gettext tools
-        id: gettext-setup
+      # 🔥 从 MSYS2 安装 Gettext 工具 (关键修复)
+      - name: Install Gettext tools from MSYS2
         run: |
-          # 显式安装 gettext
-          Write-Host "Installing gettext via vcpkg..."
-          & "$env:VCPKG_ROOT\vcpkg.exe" install gettext:x64-windows
+          Write-Host "Installing gettext tools from MSYS2..."
+          & "C:\msys64\usr\bin\bash.exe" -lc "pacman -S --noconfirm mingw-w64-x86_64-gettext"
           
-          # 检测 msgmerge 和 msgfmt 的位置
-          $possiblePaths = @(
-            "$env:VCPKG_ROOT\installed\x64-windows\bin\msgmerge.exe",
-            "$env:VCPKG_ROOT\installed\x64-windows\tools\gettext\msgmerge.exe",
-            "$env:VCPKG_ROOT\packages\gettext_x64-windows\tools\gettext\msgmerge.exe",
-            "$env:VCPKG_ROOT\packages\gettext_x64-windows\bin\msgmerge.exe"
-          )
+          # 验证安装
+          & "C:\msys64\mingw64\bin\msgmerge.exe" --version
+          & "C:\msys64\mingw64\bin\msgfmt.exe" --version
           
-          $msgmergePath = $null
-          $msgfmtPath = $null
-          
-          foreach ($path in $possiblePaths) {
-            if (Test-Path $path) {
-              $msgmergePath = $path
-              $msgfmtPath = $path -replace 'msgmerge', 'msgfmt'
-              Write-Host "Found gettext tools at: $path"
-              break
-            }
-          }
-          
-          if (-not $msgmergePath) {
-            Write-Host "::error::Could not find msgmerge.exe in any expected location"
-            Write-Host "Searching entire vcpkg directory..."
-            $searchResult = Get-ChildItem -Path "$env:VCPKG_ROOT" -Recurse -Filter "msgmerge.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($searchResult) {
-              $msgmergePath = $searchResult.FullName
-              $msgfmtPath = $searchResult.DirectoryName + "\msgfmt.exe"
-              Write-Host "Found msgmerge.exe at: $msgmergePath"
-            } else {
-              Write-Host "::error::Gettext tools not found after exhaustive search"
-              exit 1
-            }
-          }
-          
-          # 输出到 GitHub 环境变量
-          echo "GETTEXT_MSGMERGE_EXECUTABLE=$msgmergePath" >> $env:GITHUB_ENV
-          echo "GETTEXT_MSGFMT_EXECUTABLE=$msgfmtPath" >> $env:GITHUB_ENV
-          
-          # 将 bin 目录添加到 PATH
-          echo "$env:VCPKG_ROOT\installed\x64-windows\bin" >> $env:GITHUB_PATH
-          
-          # 验证
-          Write-Host "Verifying gettext tools..."
-          & $msgmergePath --version
-          & $msgfmtPath --version
+          # 设置环境变量
+          echo "GETTEXT_MSGMERGE_EXECUTABLE=C:\msys64\mingw64\bin\msgmerge.exe" >> $env:GITHUB_ENV
+          echo "GETTEXT_MSGFMT_EXECUTABLE=C:\msys64\mingw64\bin\msgfmt.exe" >> $env:GITHUB_ENV
+          echo "C:\msys64\mingw64\bin" >> $env:GITHUB_PATH
         shell: pwsh
 
       # 初始化 MSVC x64 环境
@@ -108,32 +69,37 @@ jobs:
         with:
           python-version: '3.12'
 
-      # 🔥 设置 pkg-config 环境变量
+      # 设置 pkg-config 环境变量
       - name: Setup pkg-config environment
         run: |
           $pkgConfigExe = "$env:VCPKG_ROOT\installed\x64-windows\tools\pkgconf\pkg-config.exe"
-          if (-not (Test-Path $pkgConfigExe)) {
-            $pkgConfigExe = "$env:VCPKG_ROOT\vcpkg.exe"
-          }
           echo "PKG_CONFIG_EXECUTABLE=$pkgConfigExe" >> $env:GITHUB_ENV
-          
           $pkgConfigPath = "$env:VCPKG_ROOT\installed\x64-windows\lib\pkgconfig;$env:VCPKG_ROOT\installed\x64-windows\share\pkgconfig"
           echo "PKG_CONFIG_PATH=$pkgConfigPath" >> $env:GITHUB_ENV
         shell: pwsh
 
-      # 🔥 CMake 配置 - 启用 NLS
-      - name: Configure CMake (WITH GUI + NLS)
+      # 🔥 CMake 配置 - 显式传递 Gettext 路径
+      - name: Configure CMake
         run: |
           cd fontforge
-          $pythonExe = (Get-Command python).Source
           
-          Write-Host "Gettext msgmerge: $env:GETTEXT_MSGMERGE_EXECUTABLE"
-          Write-Host "Gettext msgfmt: $env:GETTEXT_MSGFMT_EXECUTABLE"
+          Write-Host "=== Gettext Configuration ==="
+          Write-Host "MSGMERGE: $env:GETTEXT_MSGMERGE_EXECUTABLE"
+          Write-Host "MSGFMT: $env:GETTEXT_MSGFMT_EXECUTABLE"
+          
+          if (-not (Test-Path $env:GETTEXT_MSGMERGE_EXECUTABLE)) {
+            Write-Host "::error::msgmerge.exe not found!"
+            exit 1
+          }
+          if (-not (Test-Path $env:GETTEXT_MSGFMT_EXECUTABLE)) {
+            Write-Host "::error::msgfmt.exe not found!"
+            exit 1
+          }
           
           cmake -B build -G "Ninja" `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
             -DCMAKE_BUILD_TYPE=Release `
-            -DPython3_EXECUTABLE="$pythonExe" `
+            -DPython3_EXECUTABLE=(Get-Command python).Source `
             -DENABLE_GUI=ON `
             -DENABLE_PYTHON_SCRIPTING=ON `
             -DENABLE_PYTHON_EXTENSION=ON `
@@ -148,14 +114,14 @@ jobs:
             -DGETTEXT_MSGFMT_EXECUTABLE="$env:GETTEXT_MSGFMT_EXECUTABLE"
         shell: pwsh
 
-      # 编译 FontForge
+      # 编译
       - name: Build FontForge
         run: |
           cd fontforge
           cmake --build build --config Release
         shell: pwsh
 
-      # 运行测试
+      # 测试
       - name: Run pyhook tests
         run: |
           cd fontforge
@@ -165,8 +131,8 @@ jobs:
         shell: pwsh
         continue-on-error: true
       
-      # 配置嵌入式 Python
-      - name: Download and configure embedded Python 3.12.8
+      # 嵌入式 Python
+      - name: Configure embedded Python 3.12.8
         run: |
           cd fontforge
           New-Item -ItemType Directory -Force -Path build/bin/Lib
@@ -181,7 +147,7 @@ jobs:
           }
         shell: pwsh
 
-      # 复制 GUI 运行时依赖
+      # 复制 GUI 依赖
       - name: Copy GUI runtime dependencies
         run: |
           cd fontforge
@@ -216,7 +182,7 @@ jobs:
           "@ | Out-File -FilePath "$targetBin\etc\gtk-3.0\settings.ini" -Encoding UTF8
         shell: pwsh
 
-      # 创建启动脚本
+      # 启动脚本
       - name: Create launch script
         run: |
           cd fontforge/build/bin
@@ -231,7 +197,7 @@ jobs:
           "@ | Out-File -FilePath "fontforge-launcher.bat" -Encoding ASCII
         shell: pwsh
 
-      # 上传构建产物
+      # 上传产物
       - name: Upload FontForge Build Artifacts
         uses: actions/upload-artifact@v4
         with:
