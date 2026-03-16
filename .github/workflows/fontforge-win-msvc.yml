@@ -97,6 +97,9 @@ jobs:
           
           # 3. 注入到 CMakeLists.txt 开头
           $cmakeContent = Get-Content "CMakeLists.txt" -Raw
+
+           # 🔥 核心操作：把 "find_package(PkgConfig)" 替换成空字符串（删掉它）
+          $cmakeContent = $cmakeContent -replace 'find_package\(PkgConfig[^\)]*\)', ''
           $hardcode + $cmakeContent | Set-Content "CMakeLists.txt"
           
           # 4. 验证文件是否存在（调试用）
