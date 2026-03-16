@@ -102,75 +102,10 @@ jobs:
           
           # 步骤 1: 先用经典模式安装 pkgconf (最关键！)
           Write-Host "=== Step 1: Installing pkgconf (classic mode) ==="
-          Write-Host "Command: vcpkg install pkgconf:x64-windows"
           & "$env:VCPKG_ROOT\vcpkg.exe" install `
             pkgconf:x64-windows `
             --x-install-root="$installRoot" `
             --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite"
-          
-          # 验证 pkgconf 安装 - 搜索所有可能的位置
-          Write-Host "=== Verifying pkgconf installation ==="
-          $pkgConfigExe = $null
-          $possiblePaths = @(
-            "$installRoot\x64-windows\tools\pkgconf\pkg-config.exe",
-            "$installRoot\x64-windows\tools\pkgconf\bin\pkg-config.exe",
-            "$installRoot\x64-windows\tools\pkgconf\pkgconf.exe",
-            "$installRoot\x64-windows\bin\pkg-config.exe",
-            "$installRoot\x64-windows\tools\pkg-config.exe"
-          )
-          
-          foreach ($path in $possiblePaths) {
-            Write-Host "Checking: $path"
-            if (Test-Path $path) {
-              $pkgConfigExe = $path
-              Write-Host "✓ Found pkg-config at: $pkgConfigExe"
-              break
-            }
-          }
-          
-          # 如果还没找到，递归搜索
-          if (-not $pkgConfigExe) {
-            Write-Host "Searching recursively..."
-            $searchResult = Get-ChildItem -Path "$installRoot\x64-windows" -Recurse -Filter "*pkg-config*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($searchResult) {
-              $pkgConfigExe = $searchResult.FullName
-              Write-Host "✓ Found via search: $pkgConfigExe"
-            }
-          }
-          
-          # 再搜索 pkgconf.exe (某些版本用这个)
-          if (-not $pkgConfigExe) {
-            $searchResult = Get-ChildItem -Path "$installRoot\x64-windows" -Recurse -Filter "pkgconf.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($searchResult) {
-              $pkgConfigExe = $searchResult.FullName
-              Write-Host "✓ Found pkgconf.exe: $pkgConfigExe"
-            }
-          }
-          
-          if (-not $pkgConfigExe) {
-            Write-Host "::error::pkg-config executable not found!"
-            Write-Host "Listing pkgconf directory:"
-            Get-ChildItem -Path "$installRoot\x64-windows\tools\pkgconf" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
-            exit 1
-          }
-          
-          # 🔥 直接设置环境变量 (不要保存到文件)
-          "PKG_CONFIG_EXECUTABLE=$pkgConfigExe" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
-          Write-Host "Set PKG_CONFIG_EXECUTABLE=$pkgConfigExe"
-          
-          # 设置 PKG_CONFIG_PATH
-          $pkgConfigPath = "$installRoot\x64-windows\lib\pkgconfig;$installRoot\x64-windows\share\pkgconfig"
-          "PKG_CONFIG_PATH=$pkgConfigPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
-          Write-Host "Set PKG_CONFIG_PATH=$pkgConfigPath"
-          
-          # 将 pkgconf 目录添加到 PATH
-          $pkgConfigDir = Split-Path $pkgConfigExe -Parent
-          $pkgConfigDir | Out-File -FilePath $env:GITHUB_PATH -Encoding UTF8 -Append
-          Write-Host "Added to PATH: $pkgConfigDir"
-          
-          # 测试 pkg-config
-          Write-Host "=== Testing pkg-config ==="
-          & $pkgConfigExe --version
           
           # 步骤 2: 再用 manifest 模式安装其他依赖
           Write-Host "=== Step 2: Installing other dependencies (manifest mode) ==="
@@ -184,7 +119,7 @@ jobs:
           Write-Host "=== All dependencies installed ==="
         shell: pwsh
 
-      # 🔥 CMake 配置 (依赖已预先安装)
+      # 🔥 CMake 配置 (在此 step 中查找 pkg-config)
       - name: Configure CMake
         run: |
           cd fontforge
@@ -196,25 +131,60 @@ jobs:
           }
           
           $vcpkgInstalled = "$env:GITHUB_WORKSPACE\fontforge\build\vcpkg_installed"
+          $vcpkgInstalledX64 = "$vcpkgInstalled\x64-windows"
           
           Write-Host "=== Configuration ==="
           Write-Host "VCPKG_ROOT: $env:VCPKG_ROOT"
           Write-Host "VCPKG_INSTALLED_DIR: $vcpkgInstalled"
-          Write-Host "PKG_CONFIG_EXECUTABLE: $env:PKG_CONFIG_EXECUTABLE"
-          Write-Host "PKG_CONFIG_PATH: $env:PKG_CONFIG_PATH"
-          Write-Host "PYTHON_EXECUTABLE: $env:PYTHON_EXECUTABLE"
           
-          # 验证所有工具
-          $checks = @{
-            "VCPKG_ROOT" = $env:VCPKG_ROOT
-            "vcpkg toolchain" = "$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
-            "Python" = $env:PYTHON_EXECUTABLE
-            "msgmerge" = $env:GETTEXT_MSGMERGE_EXECUTABLE
-            "msgfmt" = $env:GETTEXT_MSGFMT_EXECUTABLE
-            "pkg-config" = $env:PKG_CONFIG_EXECUTABLE
+          # 🔥 在此 step 中查找 pkg-config
+          Write-Host "=== Finding pkg-config ==="
+          $pkgConfigExe = $null
+          $possiblePaths = @(
+            "$vcpkgInstalledX64\tools\pkgconf\pkg-config.exe",
+            "$vcpkgInstalledX64\tools\pkgconf\bin\pkg-config.exe",
+            "$vcpkgInstalledX64\tools\pkgconf\pkgconf.exe",
+            "$vcpkgInstalledX64\bin\pkg-config.exe"
+          )
+          
+          foreach ($path in $possiblePaths) {
+            Write-Host "Checking: $path"
+            if (Test-Path $path) {
+              $pkgConfigExe = $path
+              Write-Host "✓ Found: $pkgConfigExe"
+              break
+            }
           }
           
-          foreach ($check in $checks.GetEnumerator()) {
+          if (-not $pkgConfigExe) {
+            $searchResult = Get-ChildItem -Path "$vcpkgInstalledX64" -Recurse -Filter "*pkgconf*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($searchResult) {
+              $pkgConfigExe = $searchResult.FullName
+              Write-Host "✓ Found via search: $pkgConfigExe"
+            }
+          }
+          
+          if (-not $pkgConfigExe) {
+            Write-Host "::error::pkg-config not found!"
+            exit 1
+          }
+          
+          # 🔥 获取 Python 路径
+          $pythonExe = (Get-Command python).Source
+          Write-Host "Python: $pythonExe"
+          
+          # 验证所有工具
+          Write-Host "=== Verifying tools ==="
+          $toolChecks = @{
+            "VCPKG_ROOT" = $env:VCPKG_ROOT
+            "vcpkg toolchain" = "$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
+            "Python" = $pythonExe
+            "msgmerge" = $env:GETTEXT_MSGMERGE_EXECUTABLE
+            "msgfmt" = $env:GETTEXT_MSGFMT_EXECUTABLE
+            "pkg-config" = $pkgConfigExe
+          }
+          
+          foreach ($check in $toolChecks.GetEnumerator()) {
             if (-not (Test-Path $check.Value)) {
               Write-Host "::error::$($check.Key) not found: $($check.Value)"
               exit 1
@@ -222,11 +192,18 @@ jobs:
             Write-Host "✓ $($check.Key): $($check.Value)"
           }
           
+          # 测试 pkg-config
+          Write-Host "=== Testing pkg-config ==="
+          & $pkgConfigExe --version
+          
+          # 设置 PKG_CONFIG_PATH
+          $pkgConfigPath = "$vcpkgInstalledX64\lib\pkgconfig;$vcpkgInstalledX64\share\pkgconfig"
+          
           cmake -B build `
             -G "Ninja" `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
             -DCMAKE_BUILD_TYPE=Release `
-            -DPython3_EXECUTABLE="$env:PYTHON_EXECUTABLE" `
+            -DPython3_EXECUTABLE="$pythonExe" `
             -DENABLE_GUI=ON `
             -DENABLE_PYTHON_SCRIPTING=ON `
             -DENABLE_PYTHON_EXTENSION=ON `
@@ -236,7 +213,8 @@ jobs:
             -DENABLE_NLS=ON `
             -DBUILD_SHARED_LIBS=ON `
             -DUSE_GTK3=ON `
-            -DPKG_CONFIG_EXECUTABLE="$env:PKG_CONFIG_EXECUTABLE" `
+            -DPKG_CONFIG_EXECUTABLE="$pkgConfigExe" `
+            -DPKG_CONFIG_PATH="$pkgConfigPath" `
             -DGETTEXT_MSGMERGE_EXECUTABLE="$env:GETTEXT_MSGMERGE_EXECUTABLE" `
             -DGETTEXT_MSGFMT_EXECUTABLE="$env:GETTEXT_MSGFMT_EXECUTABLE" `
             -DVCPKG_INSTALLED_DIR="$vcpkgInstalled"
