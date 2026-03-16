@@ -81,9 +81,12 @@ jobs:
           set(GLIB_FOUND TRUE)
           # --------------- PATCH END -----------------
           "@
+
+          $finalContent = $patch + $content
+          $finalContent = $finalContent -replace '\\', '/'
           
           # 将补丁写入文件开头
-          $patch + $content | Set-Content "cmake/packages/FindGLIB.cmake"
+          $finalContent | Set-Content "cmake/packages/FindGLIB.cmake"
 
       # 进入源码目录编译（核心！）
       - name: Configure CMake
