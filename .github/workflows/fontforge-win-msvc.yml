@@ -52,84 +52,6 @@ jobs:
           "$vcpkgRoot" | Out-File -FilePath $env:GITHUB_PATH -Encoding UTF8 -Append
         shell: pwsh
 
-      # 🔥 预先安装关键依赖 (在 CMake 配置之前)
-      - name: Pre-install critical vcpkg dependencies
-        run: |
-          Write-Host "=== Pre-installing critical dependencies ==="
-          Write-Host "VCPKG_ROOT: $env:VCPKG_ROOT"
-          
-          # 确保 VCPKG_ROOT 正确
-          $vcpkgRoot = "$env:GITHUB_WORKSPACE\vcpkg"
-          if (-not $env:VCPKG_ROOT -or $env:VCPKG_ROOT -like "C:\Program Files\*") {
-            $env:VCPKG_ROOT = $vcpkgRoot
-          }
-          
-          # 进入 fontforge 目录 (包含 vcpkg.json manifest)
-          cd fontforge
-          
-          # 创建安装目录
-          $installRoot = "$env:GITHUB_WORKSPACE\fontforge\build\vcpkg_installed"
-          New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
-          
-          # 使用 manifest 模式安装依赖 (自动读取当前目录的 vcpkg.json)
-          & "$env:VCPKG_ROOT\vcpkg.exe" install `
-            --triplet x64-windows `
-            --x-install-root="$installRoot" `
-            --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite"
-          
-          Write-Host "=== Dependencies installed ==="
-          
-          # 验证安装
-          if (Test-Path "$installRoot\x64-windows\tools\pkgconf\pkg-config.exe") {
-            Write-Host "✓ pkg-config installed successfully"
-          } else {
-            Write-Host "::warning::pkg-config may not be installed"
-          }
-        shell: pwsh
-
-      # 🔥 设置 pkg-config 环境变量 (在 CMake 配置之前)
-      - name: Setup pkg-config environment
-        run: |
-          Write-Host "=== Setting up pkg-config ==="
-          
-          $vcpkgInstalled = "$env:GITHUB_WORKSPACE\fontforge\build\vcpkg_installed\x64-windows"
-          
-          Write-Host "Looking for vcpkg_installed at: $vcpkgInstalled"
-          
-          if (-not (Test-Path $vcpkgInstalled)) {
-            Write-Host "::error::vcpkg_installed not found!"
-            exit 1
-          }
-          
-          # 查找 pkg-config
-          $pkgConfigExe = "$vcpkgInstalled\tools\pkgconf\pkg-config.exe"
-          
-          if (-not (Test-Path $pkgConfigExe)) {
-            Write-Host "::warning::pkg-config not found at expected location, searching..."
-            $searchResult = Get-ChildItem -Path "$vcpkgInstalled" -Recurse -Filter "pkg-config.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($searchResult) {
-              $pkgConfigExe = $searchResult.FullName
-              Write-Host "Found pkg-config at: $pkgConfigExe"
-            } else {
-              Write-Host "::error::pkg-config not found!"
-              exit 1
-            }
-          }
-          
-          "PKG_CONFIG_EXECUTABLE=$pkgConfigExe" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
-          
-          # 设置 PKG_CONFIG_PATH
-          $pkgConfigPath = "$vcpkgInstalled\lib\pkgconfig;$vcpkgInstalled\share\pkgconfig"
-          "PKG_CONFIG_PATH=$pkgConfigPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
-          
-          # 将 pkgconf 目录添加到 PATH
-          $pkgConfigDir = Split-Path $pkgConfigExe -Parent
-          $pkgConfigDir | Out-File -FilePath $env:GITHUB_PATH -Encoding UTF8 -Append
-          
-          Write-Host "PKG_CONFIG_EXECUTABLE: $pkgConfigExe"
-          Write-Host "PKG_CONFIG_PATH: $pkgConfigPath"
-        shell: pwsh
-
       # 🔥 从 MSYS2 安装 Gettext 工具
       - name: Install Gettext tools from MSYS2
         run: |
@@ -159,6 +81,93 @@ jobs:
           $pythonExe = (Get-Command python).Source
           Write-Host "Python executable: $pythonExe"
           "PYTHON_EXECUTABLE=$pythonExe" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
+        shell: pwsh
+
+      # 🔥 预先安装关键依赖 (使用经典模式 + manifest 模式混合)
+      - name: Pre-install critical vcpkg dependencies
+        run: |
+          Write-Host "=== Pre-installing critical dependencies ==="
+          Write-Host "VCPKG_ROOT: $env:VCPKG_ROOT"
+          
+          # 确保 VCPKG_ROOT 正确
+          $vcpkgRoot = "$env:GITHUB_WORKSPACE\vcpkg"
+          if (-not $env:VCPKG_ROOT -or $env:VCPKG_ROOT -like "C:\Program Files\*") {
+            $env:VCPKG_ROOT = $vcpkgRoot
+          }
+          
+          # 创建安装目录
+          $installRoot = "$env:GITHUB_WORKSPACE\fontforge\build\vcpkg_installed"
+          New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
+          
+          # 检查 vcpkg.json 是否存在
+          $vcpkgJson = "$env:GITHUB_WORKSPACE\fontforge\vcpkg.json"
+          Write-Host "Checking vcpkg.json at: $vcpkgJson"
+          if (Test-Path $vcpkgJson) {
+            Write-Host "✓ vcpkg.json found"
+            Write-Host "Content:"
+            Get-Content $vcpkgJson
+          } else {
+            Write-Host "::error::vcpkg.json not found!"
+            exit 1
+          }
+          
+          # 步骤 1: 先用经典模式安装 pkgconf (确保 pkg-config 可用)
+          Write-Host "=== Installing pkgconf (classic mode) ==="
+          & "$env:VCPKG_ROOT\vcpkg.exe" install `
+            pkgconf:x64-windows `
+            --x-install-root="$installRoot" `
+            --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite"
+          
+          # 步骤 2: 再用 manifest 模式安装其他依赖
+          Write-Host "=== Installing other dependencies (manifest mode) ==="
+          cd fontforge
+          & "$env:VCPKG_ROOT\vcpkg.exe" install `
+            --triplet x64-windows `
+            --x-install-root="$installRoot" `
+            --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite"
+          
+          Write-Host "=== Dependencies installed ==="
+          
+          # 验证安装
+          $pkgConfigExe = "$installRoot\x64-windows\tools\pkgconf\pkg-config.exe"
+          if (Test-Path $pkgConfigExe) {
+            Write-Host "✓ pkg-config installed successfully at: $pkgConfigExe"
+          } else {
+            Write-Host "::error::pkg-config not found!"
+            Write-Host "Listing installed directory:"
+            Get-ChildItem -Path "$installRoot\x64-windows" -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue | Select-Object -First 30
+            exit 1
+          }
+        shell: pwsh
+
+      # 🔥 设置 pkg-config 环境变量 (在 CMake 配置之前)
+      - name: Setup pkg-config environment
+        run: |
+          Write-Host "=== Setting up pkg-config ==="
+          
+          $vcpkgInstalled = "$env:GITHUB_WORKSPACE\fontforge\build\vcpkg_installed\x64-windows"
+          $pkgConfigExe = "$vcpkgInstalled\tools\pkgconf\pkg-config.exe"
+          
+          Write-Host "vcpkg_installed: $vcpkgInstalled"
+          Write-Host "pkg-config: $pkgConfigExe"
+          
+          if (-not (Test-Path $pkgConfigExe)) {
+            Write-Host "::error::pkg-config not found!"
+            exit 1
+          }
+          
+          "PKG_CONFIG_EXECUTABLE=$pkgConfigExe" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
+          
+          # 设置 PKG_CONFIG_PATH
+          $pkgConfigPath = "$vcpkgInstalled\lib\pkgconfig;$vcpkgInstalled\share\pkgconfig"
+          "PKG_CONFIG_PATH=$pkgConfigPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
+          
+          # 将 pkgconf 目录添加到 PATH
+          $pkgConfigDir = Split-Path $pkgConfigExe -Parent
+          $pkgConfigDir | Out-File -FilePath $env:GITHUB_PATH -Encoding UTF8 -Append
+          
+          Write-Host "PKG_CONFIG_EXECUTABLE: $pkgConfigExe"
+          Write-Host "PKG_CONFIG_PATH: $pkgConfigPath"
         shell: pwsh
 
       # 🔥 CMake 配置 (依赖已预先安装)
