@@ -35,7 +35,7 @@ jobs:
       - name: Create vcpkg cache directory
         run: New-Item -ItemType Directory -Force -Path vcpkg-cache
 
-      # 🔥 配置 vcpkg（会自动安装 vcpkg.json 中的所有依赖，包括 pkgconf）
+      # 🔥 配置 vcpkg
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
@@ -53,56 +53,84 @@ jobs:
         with:
           python-version: '3.12'
 
-      # 🔥 关键修复：设置 PKG_CONFIG_PATH 和 PKG_CONFIG_EXECUTABLE
-      - name: Setup pkg-config environment
+      # 🔥 关键修复：设置 pkg-config 和 Gettext 环境变量
+      - name: Setup pkg-config and Gettext environment
         run: |
-          # 设置 pkg-config 可执行文件路径（vcpkg 安装的正确位置）
+          # 设置 pkg-config
           $pkgConfigExe = "$env:VCPKG_ROOT\installed\x64-windows\tools\pkgconf\pkg-config.exe"
-          
-          # 如果上述路径不存在，尝试备用路径
-          if (-not (Test-Path $pkgConfigExe)) {
-            $pkgConfigExe = "$env:VCPKG_ROOT\packages\pkgconf_x64-windows\tools\pkgconf\pkg-config.exe"
-          }
-          
-          # 如果还是不存在，使用 vcpkg 根目录的 vcpkg.exe 作为 pkg-config
           if (-not (Test-Path $pkgConfigExe)) {
             $pkgConfigExe = "$env:VCPKG_ROOT\vcpkg.exe"
           }
-          
           echo "PKG_CONFIG_EXECUTABLE=$pkgConfigExe" >> $env:GITHUB_ENV
           
-          # 设置 PKG_CONFIG_PATH 指向 vcpkg 安装的 .pc 文件
           $pkgConfigPath = "$env:VCPKG_ROOT\installed\x64-windows\lib\pkgconfig;$env:VCPKG_ROOT\installed\x64-windows\share\pkgconfig"
           echo "PKG_CONFIG_PATH=$pkgConfigPath" >> $env:GITHUB_ENV
           
-          # 验证 pkg-config 是否可用
-          Write-Host "PKG_CONFIG_EXECUTABLE: $pkgConfigExe"
-          Write-Host "PKG_CONFIG_PATH: $pkgConfigPath"
-          if (Test-Path $pkgConfigExe) {
-            & $pkgConfigExe --version
+          # 🔥 设置 Gettext 工具路径
+          $gettextBin = "$env:VCPKG_ROOT\installed\x64-windows\tools\gettext"
+          if (Test-Path "$gettextBin\msgmerge.exe") {
+            echo "GETTEXT_MSGMERGE_EXECUTABLE=$gettextBin\msgmerge.exe" >> $env:GITHUB_ENV
+            echo "GETTEXT_MSGFMT_EXECUTABLE=$gettextBin\msgfmt.exe" >> $env:GITHUB_ENV
+            Write-Host "Gettext found at: $gettextBin"
+            & "$gettextBin\msgmerge.exe" --version
+          } else {
+            Write-Host "Gettext not found in tools, trying bin directory..."
+            $gettextBin2 = "$env:VCPKG_ROOT\installed\x64-windows\bin"
+            if (Test-Path "$gettextBin2\msgmerge.exe") {
+              echo "GETTEXT_MSGMERGE_EXECUTABLE=$gettextBin2\msgmerge.exe" >> $env:GITHUB_ENV
+              echo "GETTEXT_MSGFMT_EXECUTABLE=$gettextBin2\msgfmt.exe" >> $env:GITHUB_ENV
+              Write-Host "Gettext found at: $gettextBin2"
+            } else {
+              Write-Host "::warning::Gettext executables not found, will try to disable i18n"
+            }
           }
+          
+          # 将 gettext bin 添加到 PATH
+          echo "$env:VCPKG_ROOT\installed\x64-windows\bin" >> $env:GITHUB_PATH
         shell: pwsh
 
-      # 🔥 核心修改：启用 GUI 的 CMake 配置
+      # 🔥 CMake 配置
       - name: Configure CMake (WITH GUI)
         run: |
           cd fontforge
           $pythonExe = (Get-Command python).Source
-          $pkgConfigExe = $env:PKG_CONFIG_EXECUTABLE
           
-          cmake -B build -G "Ninja" `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DPython3_EXECUTABLE="$pythonExe" `
-            -DENABLE_GUI=ON `
-            -DENABLE_PYTHON_SCRIPTING=ON `
-            -DENABLE_PYTHON_EXTENSION=ON `
-            -DENABLE_LIBSPIRO=ON `
-            -DENABLE_WOFF2=ON `
-            -DENABLE_DOCS=OFF `
-            -DBUILD_SHARED_LIBS=ON `
-            -DUSE_GTK3=ON `
-            -DPKG_CONFIG_EXECUTABLE="$pkgConfigExe"
+          $cmakeArgs = @(
+            "-B", "build",
+            "-G", "Ninja",
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake",
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DPython3_EXECUTABLE=$pythonExe",
+            "-DENABLE_GUI=ON",
+            "-DENABLE_PYTHON_SCRIPTING=ON",
+            "-DENABLE_PYTHON_EXTENSION=ON",
+            "-DENABLE_LIBSPIRO=ON",
+            "-DENABLE_WOFF2=ON",
+            "-DENABLE_DOCS=OFF",
+            "-DBUILD_SHARED_LIBS=ON",
+            "-DUSE_GTK3=ON"
+          )
+          
+          # 添加 pkg-config 配置
+          if ($env:PKG_CONFIG_EXECUTABLE) {
+            $cmakeArgs += "-DPKG_CONFIG_EXECUTABLE=$env:PKG_CONFIG_EXECUTABLE"
+          }
+          
+          # 添加 Gettext 配置
+          if ($env:GETTEXT_MSGMERGE_EXECUTABLE) {
+            $cmakeArgs += "-DGETTEXT_MSGMERGE_EXECUTABLE=$env:GETTEXT_MSGMERGE_EXECUTABLE"
+          }
+          if ($env:GETTEXT_MSGFMT_EXECUTABLE) {
+            $cmakeArgs += "-DGETTEXT_MSGFMT_EXECUTABLE=$env:GETTEXT_MSGFMT_EXECUTABLE"
+          }
+          
+          # 如果 Gettext 不可用，禁用国际化
+          if (-not $env:GETTEXT_MSGFMT_EXECUTABLE) {
+            Write-Host "::warning::Gettext not available, disabling ENABLE_NLS"
+            $cmakeArgs += "-DENABLE_NLS=OFF"
+          }
+          
+          cmake @cmakeArgs
         shell: pwsh
 
       # 编译 FontForge
@@ -112,7 +140,7 @@ jobs:
           cmake --build build --config Release
         shell: pwsh
 
-      # 运行测试（可选）
+      # 运行测试
       - name: Run pyhook tests
         run: |
           cd fontforge
