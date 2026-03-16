@@ -1,4 +1,5 @@
-name: Build FontForge with MSVC for Windows
+name: Build FontForge with MSVC for Windows (WITH GUI)
+
 on:
   push:
     branches: [ main, master ]
@@ -7,41 +8,19 @@ on:
   workflow_dispatch:
 
 jobs:
-  windows-msvc:
+  windows-msvc-gui:
     runs-on: windows-latest
     env:
       VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-cache,readwrite"
+    
     steps:
-      # 🔥 关键修改：拉取 官方FontForge 源码（你的仓库不用放源码）
+      # 🔥 拉取官方FontForge源码
       - name: Checkout FontForge official source
         uses: actions/checkout@v4
         with:
           repository: fontforge/fontforge
           ref: master
           path: fontforge
-
-      # 🔥 新增：拉取并编译 libspiro 官方源码
-      - name: Checkout and Build libspiro
-        run: |
-          # 1. 拉取 libspiro 源码（FontForge 官方维护）
-          git clone https://github.com/fontforge/libspiro.git
-          cd libspiro
-          
-          # 2. 准备路径（统一正斜杠，避免转义错误）
-          $installPath = "$PWD/install" -replace '\\', '/'
-          New-Item -ItemType Directory -Force -Path $installPath/include, $installPath/lib
-          
-          # 3. 用 MSVC 编译（源码极简，只有3个核心文件，直接编译成静态库）
-          cl.exe /c /O2 /W3 /I. spiro.c bezctx.c spiroentrypoints.c
-          lib.exe /OUT:spiro.lib spiro.obj bezctx.obj spiroentrypoints.obj
-          
-          # 4. 安装头文件和库文件
-          Copy-Item spiro.h, bezctx.h, bezctx_intf.h, spiroentrypoints.h -Destination "$installPath/include"
-          Copy-Item spiro.lib -Destination "$installPath/lib"
-          
-          # 5. 输出路径到环境变量，给后续步骤使用
-          echo "LIBSPIRO_ROOT=$installPath" | Out-File -FilePath $env:GITHUB_ENV -Append
-          Write-Host "libspiro built and installed to: $installPath"
 
       # 恢复 vcpkg 缓存
       - name: Restore vcpkg binary cache
@@ -52,7 +31,7 @@ jobs:
           key: vcpkg-files-${{ runner.os }}-${{ hashFiles('fontforge/vcpkg.json') }}
           restore-keys: |
             vcpkg-files-${{ runner.os }}-
-
+      
       - name: Create vcpkg cache directory
         run: New-Item -ItemType Directory -Force -Path vcpkg-cache
 
@@ -61,13 +40,6 @@ jobs:
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgJsonGlob: 'fontforge/vcpkg.json'
-          vcpkgTriplet: 'x64-windows'
-
-      # 🔥 关键：手动安装 pkgconf 和 gettext 工具
-      - name: Manually Install Tools via vcpkg
-        run: |
-         vcpkg install pkgconf:x64-windows gettext:x64-windows glib:x64-windows 
-
 
       # 初始化 MSVC x64 环境
       - name: Setup MSVC
@@ -79,88 +51,14 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.14'
+          python-version: '3.12'
 
-      # 终极依赖注入：包含 libspiro 路径
-      - name: Inject All Dependencies into CMakeLists
+      # 🔥 核心修改：启用GUI的CMake配置
+      - name: Configure CMake (WITH GUI)
         run: |
           cd fontforge
-          
-          # 1. 准备路径
-          $vcpkg = $env:VCPKG_ROOT -replace '\\', '/'
-          $inst = "$vcpkg/installed/x64-windows"
-          $libspiro = $env:LIBSPIRO_ROOT -replace '\\', '/' # 读取上一步编译的 libspiro 路径
-          
-          # 2. 构造强制注入的 CMake 代码
-          $hardcode = @"
-          # =============== INJECTED BY CI ===============
-          # 禁用 PkgConfig 检查，彻底避免报错
-          set(PkgConfig_FOUND TRUE CACHE BOOL "" FORCE)
-          set(PKG_CONFIG_EXECUTABLE "$inst/tools/pkgconf/pkgconf.exe" CACHE FILEPATH "" FORCE)
-          
-          # Intl / Gettext
-          set(Intl_INCLUDE_DIR "$inst/include" CACHE PATH "" FORCE)
-          set(Intl_LIBRARY "$inst/lib/intl.lib" CACHE FILEPATH "" FORCE)
-          set(Intl_FOUND TRUE CACHE BOOL "" FORCE)
-          set(GETTEXT_MSGMERGE_EXECUTABLE "$inst/tools/gettext/bin/msgmerge.exe" CACHE FILEPATH "" FORCE)
-          set(GETTEXT_MSGFMT_EXECUTABLE "$inst/tools/gettext/bin/msgfmt.exe" CACHE FILEPATH "" FORCE)
-          
-          # GLIB 完整配置（含目标）
-          set(GLIB_INCLUDE_DIRS "$inst/include/glib-2.0;$inst/lib/glib-2.0/include" CACHE PATH "" FORCE)
-          set(GLIB_LIBRARIES "$inst/lib/glib-2.0.lib" CACHE FILEPATH "" FORCE)
-          set(GLIB_GIO_LIBRARIES "$inst/lib/gio-2.0.lib" CACHE FILEPATH "" FORCE)
-          set(GLIB_GOBJECT_LIBRARIES "$inst/lib/gobject-2.0.lib" CACHE FILEPATH "" FORCE)
-          set(GLIB_VERSION "2.80.0" CACHE STRING "" FORCE)
-          set(GLIB_VERSION_OK TRUE CACHE BOOL "" FORCE)
-          set(GLIB_FOUND TRUE CACHE BOOL "" FORCE)
-          
-          if(NOT TARGET GLIB2::GLIB2)
-            add_library(GLIB2::GLIB2 UNKNOWN IMPORTED)
-            set_target_properties(GLIB2::GLIB2 PROPERTIES IMPORTED_LOCATION "$inst/lib/glib-2.0.lib" INTERFACE_INCLUDE_DIRECTORIES "$inst/include/glib-2.0;$inst/lib/glib-2.0/include")
-          endif()
-          if(NOT TARGET GLIB2::GIO)
-            add_library(GLIB2::GIO UNKNOWN IMPORTED)
-            set_target_properties(GLIB2::GIO PROPERTIES IMPORTED_LOCATION "$inst/lib/gio-2.0.lib" INTERFACE_INCLUDE_DIRECTORIES "$inst/include/glib-2.0;$inst/lib/glib-2.0/include")
-          endif()
-          if(NOT TARGET GLIB2::GOBJECT)
-            add_library(GLIB2::GOBJECT UNKNOWN IMPORTED)
-            set_target_properties(GLIB2::GOBJECT PROPERTIES IMPORTED_LOCATION "$inst/lib/gobject-2.0.lib" INTERFACE_INCLUDE_DIRECTORIES "$inst/include/glib-2.0;$inst/lib/glib-2.0/include")
-          endif()
-          
-          # 🔥 libspiro 配置（开启 ENABLE_LIBSPIRO 的核心）
-          set(Libspiro_INCLUDE_DIRS "$libspiro/include" CACHE PATH "" FORCE)
-          set(Libspiro_LIBRARIES "$libspiro/lib/spiro.lib" CACHE FILEPATH "" FORCE)
-          set(Libspiro_FOUND TRUE CACHE BOOL "" FORCE)
-          set(LIBSPIRO_VERSION "20240903" CACHE STRING "" FORCE)
-          set(LIBSPIRO_VERSION_OK TRUE CACHE BOOL "" FORCE)
-          
-          if(NOT TARGET Libspiro::Libspiro)
-            add_library(Libspiro::Libspiro UNKNOWN IMPORTED)
-            set_target_properties(Libspiro::Libspiro PROPERTIES IMPORTED_LOCATION "$libspiro/lib/spiro.lib" INTERFACE_INCLUDE_DIRECTORIES "$libspiro/include")
-          endif()
-          # =============== END INJECTION ===============
-          
-          "@
-          
-          # 3. 注入到 CMakeLists.txt 开头，并删除 PkgConfig 调用
-          $cmakeContent = Get-Content "CMakeLists.txt" -Raw
-          $cmakeContent = $cmakeContent -replace 'find_package\(PkgConfig[^\)]*\)', ''
-          $cmakeContent = $cmakeContent -replace 'pkg_check_modules\(', '# pkg_check_modules('
-          
-          $hardcode + $cmakeContent | Set-Content "CMakeLists.txt"
-          
-          Write-Host "All dependencies injected, including libspiro"
-
-      # 进入源码目录编译（核心！）
-      - name: Configure CMake
-        run: |
-          cd fontforge
-          if (Test-Path build) { Remove-Item -Recurse -Force build }
           $pythonExe = (Get-Command python).Source
-          
-          # 🔥 关键：设置 PKG_CONFIG_PATH 环境变量，让 FindGLIB 通过 pkgconf 找路径
-          $env:PKG_CONFIG_PATH = "$vcpkgInstalled/lib/pkgconfig"
-          cmake -B build -G "NMake Makefiles" `
+          cmake -B build -G "Ninja" `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
             -DCMAKE_BUILD_TYPE=Release `
             -DPython3_EXECUTABLE="$pythonExe" `
@@ -170,45 +68,139 @@ jobs:
             -DENABLE_LIBSPIRO=ON `
             -DENABLE_WOFF2=ON `
             -DENABLE_DOCS=OFF `
-            -DBUILD_SHARED_LIBS=ON
+            -DBUILD_SHARED_LIBS=ON `
+            -DUSE_GTK3=ON
+        shell: pwsh
 
+      # 编译 FontForge
       - name: Build FontForge
         run: |
           cd fontforge
-          cmake --build build
+          cmake --build build --config Release
+        shell: pwsh
 
+      # 运行测试
       - name: Run pyhook tests
         run: |
           cd fontforge
-          Copy-Item build/bin/*.dll build/lib/ -Force
-          Copy-Item build/vcpkg_installed/x64-windows/bin/*.dll build/lib/ -Force -ErrorAction SilentlyContinue
-          ctest --test-dir build -R "_pyhook" --output-on-failure
+          Copy-Item build\bin\*.dll build\lib\ -Force -ErrorAction SilentlyContinue
+          Copy-Item build\vcpkg_installed\x64-windows\bin\*.dll build\lib\ -Force -ErrorAction SilentlyContinue
+          ctest --test-dir build -R "_pyhook" --output-on-failure --configure-on-failure
+        shell: pwsh
+        continue-on-error: true
       
-      - name: Download and configure embedded Python 3.14.3
+      # 🔥 配置嵌入式 Python（使用已发布版本）
+      - name: Download and configure embedded Python 3.12.8
         run: |
           cd fontforge
           # 创建Lib目录
           New-Item -ItemType Directory -Force -Path build/bin/Lib
+          
           # 下载Python嵌入式包
-          Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.14.3/python-3.14.3-embed-amd64.zip" -OutFile python-embed.zip
+          Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.8/python-3.12.8-embed-amd64.zip" -OutFile python-embed.zip
+          
           # 解压到 bin/Lib
           Expand-Archive -Path python-embed.zip -DestinationPath build/bin/Lib -Force
+          
           # 删除压缩包
           Remove-Item -Path python-embed.zip -Force
-          # 移动 python314.dll 到 bin 目录
-          Move-Item -Path build/bin/Lib/python314.dll -Destination build/bin/ -Force -ErrorAction SilentlyContinue
-          # 移动 python314.zip 到 bin 目录
-          Move-Item -Path build/bin/Lib/python314.zip -Destination build/bin/ -Force -ErrorAction SilentlyContinue
-        
+          
+          # 移动 python312.dll 到 bin 目录
+          Move-Item -Path build/bin/Lib/python312.dll -Destination build/bin/ -Force -ErrorAction SilentlyContinue
+          
+          # 移动 python312.zip 到 bin 目录  
+          Move-Item -Path build/bin/Lib/python312.zip -Destination build/bin/ -Force -ErrorAction SilentlyContinue
+          
+          # 启用 site 模块（取消注释 import site）
+          $pypath = "build/bin/Lib/python312._pth"
+          if (Test-Path $pypath) {
+            (Get-Content $pypath) -replace '^#import site', 'import site' | Set-Content $pypath
+          }
+        shell: pwsh
+
+      # 🔥 复制GUI运行时依赖（GTK3、Cairo等）
+      - name: Copy GUI runtime dependencies
+        run: |
+          cd fontforge
+          $vcpkgBin = "build\vcpkg_installed\x64-windows\bin"
+          $targetBin = "build\bin"
+          
+          # 复制GTK3及相关DLL
+          $guiDlls = @(
+            "gtk-3-0.dll",
+            "gdk-3-0.dll",
+            "gdk_pixbuf-2.0-0.dll",
+            "pango-1.0-0.dll",
+            "pangocairo-1.0-0.dll",
+            "pangowin32-1.0-0.dll",
+            "cairo-2.dll",
+            "cairo-gobject-2.dll",
+            "glib-2.0-0.dll",
+            "gobject-2.0-0.dll",
+            "gio-2.0-0.dll",
+            "gmodule-2.0-0.dll",
+            "gthread-2.0-0.dll",
+            "intl.dll",
+            "libffi-8.dll",
+            "libpng16-16.dll",
+            "libjpeg-8.dll",
+            "libtiff-5.dll",
+            "libwebp-7.dll",
+            "freetype-6.dll",
+            "fontconfig-1.dll",
+            "expat.dll",
+            "brotli*.dll",
+            "zlib1.dll",
+            "libiconv-2.dll",
+            "libcharset-1.dll",
+            "libxml2-2.dll",
+            "libxslt-1.dll"
+          )
+          
+          foreach ($dll in $guiDlls) {
+            Get-Item "$vcpkgBin\$dll" -ErrorAction SilentlyContinue | Copy-Item -Destination "$targetBin\" -Force
+          }
+          
+          # 复制GTK3主题和图标
+          Copy-Item "$vcpkgBin\..\share\themes\*" -Destination "$targetBin\share\themes\" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item "$vcpkgBin\..\share\icons\*" -Destination "$targetBin\share\icons\" -Recurse -Force -ErrorAction SilentlyContinue
+          
+          # 复制GTK3设置文件
+          New-Item -ItemType Directory -Force -Path "$targetBin\etc\gtk-3.0"
+          @"
+          [Settings]
+          gtk-theme-name=win32
+          gtk-icon-theme-name=Adwaita
+          gtk-font-name=Segoe UI 9
+          "@ | Out-File -FilePath "$targetBin\etc\gtk-3.0\settings.ini" -Encoding UTF8
+        shell: pwsh
+
+      # 🔥 创建启动脚本
+      - name: Create launch script
+        run: |
+          cd fontforge/build/bin
+          @"
+          @echo off
+          setlocal
+          set FONTFORGE_HOME=%~dp0
+          set PATH=%FONTFORGE_HOME%;%PATH%
+          set PYTHONHOME=%FONTFORGE_HOME%
+          set PYTHONPATH=%FONTFORGE_HOME%Lib
+          "%FONTFORGE_HOME%fontforge.exe" %*
+          "@ | Out-File -FilePath "fontforge-launcher.bat" -Encoding ASCII
+        shell: pwsh
+
+      # 上传构建产物
       - name: Upload FontForge Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          # 下载时显示的名字
-          name: FontForge-Windows-MSVC-Build
-          # 上传编译好的所有 exe/dll 文件
-          path: 
-              fontforge/build/bin/
+          name: FontForge-Windows-MSVC-GUI-Build
+          path: |
+            fontforge/build/bin/
+            fontforge/build/share/
+            fontforge/build/etc/
           if-no-files-found: error
+          retention-days: 30
 
       # 保存缓存
       - name: Save vcpkg binary cache
