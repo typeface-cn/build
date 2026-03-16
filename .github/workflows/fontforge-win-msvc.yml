@@ -39,15 +39,11 @@ jobs:
       - name: Setup vcpkg manually
         run: |
           Write-Host "Cloning vcpkg with full history..."
-          
-          # 完整克隆 vcpkg
           git clone https://github.com/microsoft/vcpkg.git
           
-          # 进入 vcpkg 目录并引导
           cd vcpkg
           .\bootstrap-vcpkg.bat -disableMetrics
           
-          # 设置 VCPKG_ROOT
           $vcpkgRoot = "$env:GITHUB_WORKSPACE\vcpkg"
           Write-Host "VCPKG_ROOT: $vcpkgRoot"
           
@@ -68,16 +64,27 @@ jobs:
             $env:VCPKG_ROOT = $vcpkgRoot
           }
           
+          # 进入 fontforge 目录 (包含 vcpkg.json manifest)
           cd fontforge
           
-          # 使用 vcpkg manifest 模式预先安装依赖
-          # 这会创建 build/vcpkg_installed 目录
+          # 创建安装目录
+          $installRoot = "$env:GITHUB_WORKSPACE\fontforge\build\vcpkg_installed"
+          New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
+          
+          # 使用 manifest 模式安装依赖 (自动读取当前目录的 vcpkg.json)
           & "$env:VCPKG_ROOT\vcpkg.exe" install `
             --triplet x64-windows `
-            --x-manifest-dir="$env:GITHUB_WORKSPACE\fontforge" `
-            --x-install-root="$env:GITHUB_WORKSPACE\fontforge\build\vcpkg_installed"
+            --x-install-root="$installRoot" `
+            --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite"
           
           Write-Host "=== Dependencies installed ==="
+          
+          # 验证安装
+          if (Test-Path "$installRoot\x64-windows\tools\pkgconf\pkg-config.exe") {
+            Write-Host "✓ pkg-config installed successfully"
+          } else {
+            Write-Host "::warning::pkg-config may not be installed"
+          }
         shell: pwsh
 
       # 🔥 设置 pkg-config 环境变量 (在 CMake 配置之前)
@@ -165,12 +172,13 @@ jobs:
             $env:VCPKG_ROOT = $vcpkgRoot
           }
           
+          $vcpkgInstalled = "$env:GITHUB_WORKSPACE\fontforge\build\vcpkg_installed"
+          
           Write-Host "=== Configuration ==="
           Write-Host "VCPKG_ROOT: $env:VCPKG_ROOT"
+          Write-Host "VCPKG_INSTALLED_DIR: $vcpkgInstalled"
           Write-Host "PKG_CONFIG_EXECUTABLE: $env:PKG_CONFIG_EXECUTABLE"
           Write-Host "PYTHON_EXECUTABLE: $env:PYTHON_EXECUTABLE"
-          Write-Host "GETTEXT_MSGMERGE_EXECUTABLE: $env:GETTEXT_MSGMERGE_EXECUTABLE"
-          Write-Host "GETTEXT_MSGFMT_EXECUTABLE: $env:GETTEXT_MSGFMT_EXECUTABLE"
           
           # 验证所有工具
           $checks = @{
@@ -207,8 +215,7 @@ jobs:
             -DPKG_CONFIG_EXECUTABLE="$env:PKG_CONFIG_EXECUTABLE" `
             -DGETTEXT_MSGMERGE_EXECUTABLE="$env:GETTEXT_MSGMERGE_EXECUTABLE" `
             -DGETTEXT_MSGFMT_EXECUTABLE="$env:GETTEXT_MSGFMT_EXECUTABLE" `
-            -DVCPKG_MANIFEST_DIR="$env:GITHUB_WORKSPACE/fontforge" `
-            -DVCPKG_INSTALLED_DIR="$env:GITHUB_WORKSPACE/fontforge/build/vcpkg_installed"
+            -DVCPKG_INSTALLED_DIR="$vcpkgInstalled"
         shell: pwsh
 
       # 编译
