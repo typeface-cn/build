@@ -58,8 +58,7 @@ jobs:
         with:
           python-version: '3.14'
 
-     # 终极核弹级 Patch
-      - name: Nuke CMake Find Logic
+      - name: Replace FindGLIB.cmake entirely
         run: |
           cd fontforge
           
@@ -67,46 +66,64 @@ jobs:
           $vcpkg = $env:VCPKG_ROOT -replace '\\', '/'
           $inst = "$vcpkg/installed/x64-windows"
           
-          # 2. 构造注入代码（完全不依赖 PkgConfig）
-          $hardcode = @"
-          # =============== INJECTED BY CI ===============
-          # Disable PkgConfig check by force-setting the package found
-          set(PkgConfig_FOUND TRUE CACHE BOOL "" FORCE)
-          # Even if it runs, point it to the right place
-          set(PKG_CONFIG_EXECUTABLE "$inst/tools/pkgconf/pkgconf.exe" CACHE FILEPATH "" FORCE)
-          
-          # Force Intl
-          set(Intl_INCLUDE_DIR "$inst/include" CACHE PATH "" FORCE)
-          set(Intl_LIBRARY "$inst/lib/intl.lib" CACHE FILEPATH "" FORCE)
-          set(Intl_FOUND TRUE CACHE BOOL "" FORCE)
-          
-          # Force GLIB
+          # 2. 构造一个全新的、极简的 FindGLIB.cmake 内容
+          # 这个文件什么都不做，直接返回成功
+          $newFindGLIB = @"
+          # THIS FILE IS REPLACED BY CI
           set(GLIB_INCLUDE_DIRS "$inst/include/glib-2.0;$inst/lib/glib-2.0/include" CACHE PATH "" FORCE)
           set(GLIB_LIBRARIES "$inst/lib/glib-2.0.lib" CACHE FILEPATH "" FORCE)
           set(GLIB_GIO_LIBRARIES "$inst/lib/gio-2.0.lib" CACHE FILEPATH "" FORCE)
           set(GLIB_GOBJECT_LIBRARIES "$inst/lib/gobject-2.0.lib" CACHE FILEPATH "" FORCE)
+          set(GLIB_VERSION "2.76.0" CACHE STRING "" FORCE)
           set(GLIB_VERSION_OK TRUE CACHE BOOL "" FORCE)
           set(GLIB_FOUND TRUE CACHE BOOL "" FORCE)
           
-          # Force Gettext Tools
+          # Provide target names that FontForge expects
+          if(NOT TARGET GLIB2::GLIB2)
+            add_library(GLIB2::GLIB2 UNKNOWN IMPORTED)
+            set_target_properties(GLIB2::GLIB2 PROPERTIES
+              IMPORTED_LOCATION "$inst/lib/glib-2.0.lib"
+              INTERFACE_INCLUDE_DIRECTORIES "$inst/include/glib-2.0;$inst/lib/glib-2.0/include"
+            )
+          endif()
+          if(NOT TARGET GLIB2::GIO)
+            add_library(GLIB2::GIO UNKNOWN IMPORTED)
+            set_target_properties(GLIB2::GIO PROPERTIES
+              IMPORTED_LOCATION "$inst/lib/gio-2.0.lib"
+              INTERFACE_INCLUDE_DIRECTORIES "$inst/include/glib-2.0;$inst/lib/glib-2.0/include"
+            )
+          endif()
+          if(NOT TARGET GLIB2::GOBJECT)
+            add_library(GLIB2::GOBJECT UNKNOWN IMPORTED)
+            set_target_properties(GLIB2::GOBJECT PROPERTIES
+              IMPORTED_LOCATION "$inst/lib/gobject-2.0.lib"
+              INTERFACE_INCLUDE_DIRECTORIES "$inst/include/glib-2.0;$inst/lib/glib-2.0/include"
+            )
+          endif()
+          "@
+          
+          # 3. 直接覆盖原文件
+          $newFindGLIB | Set-Content "cmake/packages/FindGLIB.cmake"
+          
+          # 4. 同时也修改主 CMakeLists.txt，移除 PkgConfig
+          $cmakeContent = Get-Content "CMakeLists.txt" -Raw
+          $cmakeContent = $cmakeContent -replace 'find_package\(PkgConfig[^\)]*\)', ''
+          
+          # 5. 注入 Intl 和 Gettext 路径到主文件开头
+          $hardcode = @"
+          # =============== INJECTED BY CI ===============
+          set(Intl_INCLUDE_DIR "$inst/include" CACHE PATH "" FORCE)
+          set(Intl_LIBRARY "$inst/lib/intl.lib" CACHE FILEPATH "" FORCE)
+          set(Intl_FOUND TRUE CACHE BOOL "" FORCE)
           set(GETTEXT_MSGMERGE_EXECUTABLE "$inst/tools/gettext/bin/msgmerge.exe" CACHE FILEPATH "" FORCE)
           set(GETTEXT_MSGFMT_EXECUTABLE "$inst/tools/gettext/bin/msgfmt.exe" CACHE FILEPATH "" FORCE)
           # =============== END INJECTION ===============
           
           "@
           
-          # 3. 注入到 CMakeLists.txt 开头
-          $cmakeContent = Get-Content "CMakeLists.txt" -Raw
-
-           # 🔥 核心操作：把 "find_package(PkgConfig)" 替换成空字符串（删掉它）
-          $cmakeContent = $cmakeContent -replace 'find_package\(PkgConfig[^\)]*\)', ''
           $hardcode + $cmakeContent | Set-Content "CMakeLists.txt"
           
-          # 4. 验证文件是否存在（调试用）
-          Write-Host "Checking if files exist at: $inst"
-          if (Test-Path "$inst/tools/pkgconf/pkgconf.exe") { Write-Host "GOOD: pkgconf found" } else { Write-Host "BAD: pkgconf missing" }
-          if (Test-Path "$inst/include/glib-2.0") { Write-Host "GOOD: glib headers found" } else { Write-Host "BAD: glib headers missing" }
-
+          Write-Host "FindGLIB.cmake has been replaced. Game Over."
 
       # 进入源码目录编译（核心！）
       - name: Configure CMake
