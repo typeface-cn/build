@@ -35,38 +35,60 @@ jobs:
       - name: Create vcpkg cache directory
         run: New-Item -ItemType Directory -Force -Path vcpkg-cache
 
-      # 🔥 手动克隆 vcpkg (完整历史，非 shallow)
+      # 🔥 手动克隆 vcpkg (完整历史) + 设置 VCPKG_ROOT
       - name: Setup vcpkg manually
         run: |
           Write-Host "Cloning vcpkg with full history..."
           
-          # 完整克隆 vcpkg (不要使用 --depth 1)
+          # 完整克隆 vcpkg
           git clone https://github.com/microsoft/vcpkg.git
           
-          # 进入 vcpkg 目录
+          # 进入 vcpkg 目录并引导
           cd vcpkg
+          .\bootstrap-vcpkg.bat -disableMetrics
           
-          # 引导 vcpkg
-          .\bootstrap-vcpkg.bat
-          
-          # 设置 VCPKG_ROOT 环境变量
+          # 设置 VCPKG_ROOT - 使用绝对路径
           $vcpkgRoot = "$env:GITHUB_WORKSPACE\vcpkg"
-          echo "VCPKG_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
-          echo "VCPKG_DEFAULT_TRIPLET=x64-windows" >> $env:GITHUB_ENV
+          Write-Host "VCPKG_ROOT will be set to: $vcpkgRoot"
+          Write-Host "GITHUB_WORKSPACE: $env:GITHUB_WORKSPACE"
+          
+          # 写入 GITHUB_ENV 文件
+          "VCPKG_ROOT=$vcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
+          "VCPKG_DEFAULT_TRIPLET=x64-windows" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
           
           # 将 vcpkg 添加到 PATH
-          echo "$vcpkgRoot" >> $env:GITHUB_PATH
+          "$vcpkgRoot" | Out-File -FilePath $env:GITHUB_PATH -Encoding UTF8 -Append
           
-          Write-Host "VCPKG_ROOT: $vcpkgRoot"
-          Write-Host "VCPKG_ROOT verified: $(Test-Path $vcpkgRoot)"
+          Write-Host "VCPKG_ROOT written to GITHUB_ENV"
+          Write-Host "Contents of GITHUB_ENV:"
+          Get-Content $env:GITHUB_ENV
         shell: pwsh
 
-      # 🔥 安装 vcpkg 依赖
-      - name: Install vcpkg dependencies
+      # 🔥 验证 VCPKG_ROOT 并安装依赖
+      - name: Verify VCPKG_ROOT and install dependencies
         run: |
+          Write-Host "=== Verifying VCPKG_ROOT ==="
+          Write-Host "VCPKG_ROOT from env: $env:VCPKG_ROOT"
+          Write-Host "GITHUB_WORKSPACE: $env:GITHUB_WORKSPACE"
+          
+          # 如果 VCPKG_ROOT 不正确，使用 GITHUB_WORKSPACE 推导
+          if (-not $env:VCPKG_ROOT -or $env:VCPKG_ROOT -like "C:\Program Files\*") {
+            Write-Host "::warning::VCPKG_ROOT not set correctly, deriving from GITHUB_WORKSPACE"
+            $env:VCPKG_ROOT = "$env:GITHUB_WORKSPACE\vcpkg"
+            Write-Host "Derived VCPKG_ROOT: $env:VCPKG_ROOT"
+          }
+          
+          # 验证 vcpkg 目录存在
+          if (-not (Test-Path "$env:VCPKG_ROOT\vcpkg.exe")) {
+            Write-Host "::error::vcpkg.exe not found at: $env:VCPKG_ROOT\vcpkg.exe"
+            exit 1
+          }
+          
+          Write-Host "=== Installing dependencies ==="
           cd fontforge
-          Write-Host "Installing dependencies with vcpkg..."
-          vcpkg install --triplet x64-windows
+          
+          # 使用绝对路径调用 vcpkg
+          & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet x64-windows
         shell: pwsh
 
       # 🔥 从 MSYS2 安装 Gettext 工具
@@ -80,9 +102,9 @@ jobs:
           & "C:\msys64\mingw64\bin\msgfmt.exe" --version
           
           # 设置环境变量
-          echo "GETTEXT_MSGMERGE_EXECUTABLE=C:\msys64\mingw64\bin\msgmerge.exe" >> $env:GITHUB_ENV
-          echo "GETTEXT_MSGFMT_EXECUTABLE=C:\msys64\mingw64\bin\msgfmt.exe" >> $env:GITHUB_ENV
-          echo "C:\msys64\mingw64\bin" >> $env:GITHUB_PATH
+          "GETTEXT_MSGMERGE_EXECUTABLE=C:\msys64\mingw64\bin\msgmerge.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
+          "GETTEXT_MSGFMT_EXECUTABLE=C:\msys64\mingw64\bin\msgfmt.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
+          "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding UTF8 -Append
         shell: pwsh
 
       # 初始化 MSVC x64 环境
@@ -102,46 +124,73 @@ jobs:
         run: |
           $pythonExe = (Get-Command python).Source
           Write-Host "Python executable: $pythonExe"
-          echo "PYTHON_EXECUTABLE=$pythonExe" >> $env:GITHUB_ENV
+          "PYTHON_EXECUTABLE=$pythonExe" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
         shell: pwsh
 
-      # 🔥 设置 pkg-config 路径
+      # 🔥 设置 pkg-config 路径 (使用推导的 VCPKG_ROOT)
       - name: Setup pkg-config environment
         run: |
+          Write-Host "=== Setting up pkg-config ==="
+          Write-Host "VCPKG_ROOT from env: $env:VCPKG_ROOT"
+          Write-Host "GITHUB_WORKSPACE: $env:GITHUB_WORKSPACE"
+          
+          # 如果 VCPKG_ROOT 不正确，使用 GITHUB_WORKSPACE 推导
+          if (-not $env:VCPKG_ROOT -or $env:VCPKG_ROOT -like "C:\Program Files\*") {
+            Write-Host "::warning::VCPKG_ROOT not set correctly, deriving from GITHUB_WORKSPACE"
+            $env:VCPKG_ROOT = "$env:GITHUB_WORKSPACE\vcpkg"
+          }
+          
           # pkgconf 在 vcpkg 安装后的位置
           $pkgConfigExe = "$env:VCPKG_ROOT\installed\x64-windows\tools\pkgconf\pkg-config.exe"
           
+          Write-Host "Looking for pkg-config at: $pkgConfigExe"
+          
           if (-not (Test-Path $pkgConfigExe)) {
-            Write-Host "::error::pkg-config not found at: $pkgConfigExe"
+            Write-Host "::warning::pkg-config not found at expected location"
+            
             # 搜索备用位置
             $searchResult = Get-ChildItem -Path "$env:VCPKG_ROOT\installed" -Recurse -Filter "pkg-config.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($searchResult) {
               $pkgConfigExe = $searchResult.FullName
               Write-Host "Found pkg-config at: $pkgConfigExe"
             } else {
-              Write-Host "::error::pkg-config not found anywhere!"
-              exit 1
+              # 搜索 packages 目录
+              $searchResult = Get-ChildItem -Path "$env:VCPKG_ROOT\packages" -Recurse -Filter "pkg-config.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($searchResult) {
+                $pkgConfigExe = $searchResult.FullName
+                Write-Host "Found pkg-config in packages at: $pkgConfigExe"
+              } else {
+                Write-Host "::error::pkg-config not found anywhere!"
+                Write-Host "Listing installed directory:"
+                Get-ChildItem -Path "$env:VCPKG_ROOT\installed" -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue | Select-Object -First 20
+                exit 1
+              }
             }
           }
           
-          echo "PKG_CONFIG_EXECUTABLE=$pkgConfigExe" >> $env:GITHUB_ENV
+          "PKG_CONFIG_EXECUTABLE=$pkgConfigExe" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
           
           # 设置 PKG_CONFIG_PATH
           $pkgConfigPath = "$env:VCPKG_ROOT\installed\x64-windows\lib\pkgconfig;$env:VCPKG_ROOT\installed\x64-windows\share\pkgconfig"
-          echo "PKG_CONFIG_PATH=$pkgConfigPath" >> $env:GITHUB_ENV
+          "PKG_CONFIG_PATH=$pkgConfigPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
           
           # 将 pkgconf 目录添加到 PATH
           $pkgConfigDir = Split-Path $pkgConfigExe -Parent
-          echo "$pkgConfigDir" >> $env:GITHUB_PATH
+          $pkgConfigDir | Out-File -FilePath $env:GITHUB_PATH -Encoding UTF8 -Append
           
           Write-Host "PKG_CONFIG_EXECUTABLE: $pkgConfigExe"
-          Write-Host "PKG_CONFIG_PATH: $env:PKG_CONFIG_PATH"
+          Write-Host "PKG_CONFIG_PATH: $pkgConfigPath"
         shell: pwsh
 
       # 🔥 CMake 配置
       - name: Configure CMake
         run: |
           cd fontforge
+          
+          # 再次确保 VCPKG_ROOT 正确
+          if (-not $env:VCPKG_ROOT -or $env:VCPKG_ROOT -like "C:\Program Files\*") {
+            $env:VCPKG_ROOT = "$env:GITHUB_WORKSPACE\vcpkg"
+          }
           
           Write-Host "=== Configuration ==="
           Write-Host "VCPKG_ROOT: $env:VCPKG_ROOT"
@@ -152,29 +201,21 @@ jobs:
           Write-Host "PKG_CONFIG: $env:PKG_CONFIG_EXECUTABLE"
           
           # 验证所有工具
-          if (-not (Test-Path $env:VCPKG_ROOT)) {
-            Write-Host "::error::VCPKG_ROOT not found!"
-            exit 1
+          $checks = @{
+            "VCPKG_ROOT" = $env:VCPKG_ROOT
+            "vcpkg toolchain" = "$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
+            "Python" = $env:PYTHON_EXECUTABLE
+            "msgmerge" = $env:GETTEXT_MSGMERGE_EXECUTABLE
+            "msgfmt" = $env:GETTEXT_MSGFMT_EXECUTABLE
+            "pkg-config" = $env:PKG_CONFIG_EXECUTABLE
           }
-          if (-not (Test-Path "$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake")) {
-            Write-Host "::error::vcpkg toolchain file not found!"
-            exit 1
-          }
-          if (-not (Test-Path $env:PYTHON_EXECUTABLE)) {
-            Write-Host "::error::Python executable not found!"
-            exit 1
-          }
-          if (-not (Test-Path $env:GETTEXT_MSGMERGE_EXECUTABLE)) {
-            Write-Host "::error::msgmerge.exe not found!"
-            exit 1
-          }
-          if (-not (Test-Path $env:GETTEXT_MSGFMT_EXECUTABLE)) {
-            Write-Host "::error::msgfmt.exe not found!"
-            exit 1
-          }
-          if (-not (Test-Path $env:PKG_CONFIG_EXECUTABLE)) {
-            Write-Host "::error::pkg-config not found!"
-            exit 1
+          
+          foreach ($check in $checks.GetEnumerator()) {
+            if (-not (Test-Path $check.Value)) {
+              Write-Host "::error::$($check.Key) not found: $($check.Value)"
+              exit 1
+            }
+            Write-Host "✓ $($check.Key): $($check.Value)"
           }
           
           cmake -B build `
