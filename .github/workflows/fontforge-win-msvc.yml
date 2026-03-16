@@ -108,6 +108,10 @@ jobs:
           # 4. 同时也修改主 CMakeLists.txt，移除 PkgConfig
           $cmakeContent = Get-Content "CMakeLists.txt" -Raw
           $cmakeContent = $cmakeContent -replace 'find_package\(PkgConfig[^\)]*\)', ''
+
+          # 🔥 新增：注释掉所有的 pkg_check_modules 调用
+          # 正则匹配：将 pkg_check_modules(...) 替换为 # pkg_check_modules(...)
+          $cmakeContent = $cmakeContent -replace 'pkg_check_modules\(', '# pkg_check_modules('
           
           # 5. 注入 Intl 和 Gettext 路径到主文件开头
           $hardcode = @"
