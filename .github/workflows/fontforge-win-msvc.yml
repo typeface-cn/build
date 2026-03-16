@@ -40,11 +40,6 @@ jobs:
           vcpkgJsonGlob: 'fontforge/vcpkg.json'
           vcpkgTriplet: 'x64-windows'
 
-      - name: Setup Tool Paths
-        run: |
-          echo "$env:VCPKG_ROOT\installed\x64-windows\tools\pkgconf" | Out-File -FilePath $env:GITHUB_PATH -Append
-          echo "$env:VCPKG_ROOT\installed\x64-windows\tools\gettext\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
-
 
       # 初始化 MSVC x64 环境
       - name: Setup MSVC
@@ -58,7 +53,47 @@ jobs:
         with:
           python-version: '3.14'
 
-     
+     # 🔥🔥🔥 终极方案：直接修改 CMakeLists.txt 开头
+      - name: Hardcode All Dependencies into CMakeLists
+        run: |
+          cd fontforge
+          
+          # 1. 准备路径（全正斜杠）
+          $vcpkg = $env:VCPKG_ROOT -replace '\\', '/'
+          $inst = "$vcpkg/installed/x64-windows"
+          
+          # 2. 构造强制注入的 CMake 代码
+          $hardcode = @"
+          # =============== INJECTED BY CI ===============
+          # Force PkgConfig path
+          set(PKG_CONFIG_EXECUTABLE "$inst/tools/pkgconf/pkgconf.exe" CACHE FILEPATH "" FORCE)
+          
+          # Force Intl (Gettext libintl)
+          set(Intl_INCLUDE_DIR "$inst/include" CACHE PATH "" FORCE)
+          set(Intl_LIBRARY "$inst/lib/intl.lib" CACHE FILEPATH "" FORCE)
+          
+          # Force GLIB (Bypass FindGLIB.cmake entirely)
+          set(GLIB_INCLUDE_DIRS "$inst/include/glib-2.0;$inst/lib/glib-2.0/include" CACHE PATH "" FORCE)
+          set(GLIB_LIBRARIES "$inst/lib/glib-2.0.lib" CACHE FILEPATH "" FORCE)
+          set(GLIB_GIO_LIBRARIES "$inst/lib/gio-2.0.lib" CACHE FILEPATH "" FORCE)
+          set(GLIB_GOBJECT_LIBRARIES "$inst/lib/gobject-2.0.lib" CACHE FILEPATH "" FORCE)
+          set(GLIB_VERSION_OK TRUE CACHE BOOL "" FORCE)
+          set(GLIB_FOUND TRUE CACHE BOOL "" FORCE)
+          
+          # Force Gettext tools
+          set(GETTEXT_MSGMERGE_EXECUTABLE "$inst/tools/gettext/bin/msgmerge.exe" CACHE FILEPATH "" FORCE)
+          set(GETTEXT_MSGFMT_EXECUTABLE "$inst/tools/gettext/bin/msgfmt.exe" CACHE FILEPATH "" FORCE)
+          # =============== END INJECTION ===============
+          
+          "@
+          
+          # 3. 读取原始 CMakeLists.txt
+          $cmakeContent = Get-Content "CMakeLists.txt" -Raw
+          
+          # 4. 把我们的代码插在最开头
+          $hardcode + $cmakeContent | Set-Content "CMakeLists.txt"
+          
+          Write-Host "Successfully hardcoded dependencies into CMakeLists.txt"
 
       # 进入源码目录编译（核心！）
       - name: Configure CMake
@@ -66,7 +101,6 @@ jobs:
           cd fontforge
           if (Test-Path build) { Remove-Item -Recurse -Force build }
           $pythonExe = (Get-Command python).Source
-          $vcpkgInstalled = "$env:VCPKG_ROOT\installed\x64-windows" -replace '\\', '/'
           
           # 🔥 关键：设置 PKG_CONFIG_PATH 环境变量，让 FindGLIB 通过 pkgconf 找路径
           $env:PKG_CONFIG_PATH = "$vcpkgInstalled/lib/pkgconfig"
@@ -74,10 +108,6 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
             -DCMAKE_BUILD_TYPE=Release `
             -DPython3_EXECUTABLE="$pythonExe" `
-            -DIntl_INCLUDE_DIR="$vcpkgInstalled/include" `
-            -DIntl_LIBRARY="$vcpkgInstalled/lib/intl.lib" `
-            -DGETTEXT_MSGMERGE_EXECUTABLE="$vcpkgInstalled/tools/gettext/bin/msgmerge.exe" `
-            -DGETTEXT_MSGFMT_EXECUTABLE="$vcpkgInstalled/tools/gettext/bin/msgfmt.exe" `
             -DENABLE_GUI=ON `
             -DENABLE_PYTHON_SCRIPTING=ON `
             -DENABLE_PYTHON_EXTENSION=ON `
