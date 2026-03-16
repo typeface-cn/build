@@ -35,20 +35,11 @@ jobs:
       - name: Create vcpkg cache directory
         run: New-Item -ItemType Directory -Force -Path vcpkg-cache
 
-      # 🔥 配置 vcpkg（官方源码路径）
+      # 🔥 配置 vcpkg（会自动安装 vcpkg.json 中的所有依赖，包括 pkgconf）
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgJsonGlob: 'fontforge/vcpkg.json'
-
-      # 🔥 关键修复：安装 pkgconf（提供 pkg-config.exe）
-      - name: Install pkgconf via vcpkg
-        run: |
-          & "$env:VCPKG_ROOT\vcpkg.exe" install pkgconf:x64-windows
-          # 将 pkg-config.exe 添加到 PATH
-          $pkgConfigPath = "$env:VCPKG_ROOT\packages\pkgconf_x64-windows\tools\pkgconf"
-          echo "$pkgConfigPath" >> $env:GITHUB_PATH
-        shell: pwsh
 
       # 初始化 MSVC x64 环境
       - name: Setup MSVC
@@ -62,11 +53,43 @@ jobs:
         with:
           python-version: '3.12'
 
+      # 🔥 关键修复：设置 PKG_CONFIG_PATH 和 PKG_CONFIG_EXECUTABLE
+      - name: Setup pkg-config environment
+        run: |
+          # 设置 pkg-config 可执行文件路径（vcpkg 安装的正确位置）
+          $pkgConfigExe = "$env:VCPKG_ROOT\installed\x64-windows\tools\pkgconf\pkg-config.exe"
+          
+          # 如果上述路径不存在，尝试备用路径
+          if (-not (Test-Path $pkgConfigExe)) {
+            $pkgConfigExe = "$env:VCPKG_ROOT\packages\pkgconf_x64-windows\tools\pkgconf\pkg-config.exe"
+          }
+          
+          # 如果还是不存在，使用 vcpkg 根目录的 vcpkg.exe 作为 pkg-config
+          if (-not (Test-Path $pkgConfigExe)) {
+            $pkgConfigExe = "$env:VCPKG_ROOT\vcpkg.exe"
+          }
+          
+          echo "PKG_CONFIG_EXECUTABLE=$pkgConfigExe" >> $env:GITHUB_ENV
+          
+          # 设置 PKG_CONFIG_PATH 指向 vcpkg 安装的 .pc 文件
+          $pkgConfigPath = "$env:VCPKG_ROOT\installed\x64-windows\lib\pkgconfig;$env:VCPKG_ROOT\installed\x64-windows\share\pkgconfig"
+          echo "PKG_CONFIG_PATH=$pkgConfigPath" >> $env:GITHUB_ENV
+          
+          # 验证 pkg-config 是否可用
+          Write-Host "PKG_CONFIG_EXECUTABLE: $pkgConfigExe"
+          Write-Host "PKG_CONFIG_PATH: $pkgConfigPath"
+          if (Test-Path $pkgConfigExe) {
+            & $pkgConfigExe --version
+          }
+        shell: pwsh
+
       # 🔥 核心修改：启用 GUI 的 CMake 配置
       - name: Configure CMake (WITH GUI)
         run: |
           cd fontforge
           $pythonExe = (Get-Command python).Source
+          $pkgConfigExe = $env:PKG_CONFIG_EXECUTABLE
+          
           cmake -B build -G "Ninja" `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
             -DCMAKE_BUILD_TYPE=Release `
@@ -79,7 +102,7 @@ jobs:
             -DENABLE_DOCS=OFF `
             -DBUILD_SHARED_LIBS=ON `
             -DUSE_GTK3=ON `
-            -DPKG_CONFIG_EXECUTABLE="$env:VCPKG_ROOT\packages\pkgconf_x64-windows\tools\pkgconf\pkg-config.exe"
+            -DPKG_CONFIG_EXECUTABLE="$pkgConfigExe"
         shell: pwsh
 
       # 编译 FontForge
@@ -89,7 +112,7 @@ jobs:
           cmake --build build --config Release
         shell: pwsh
 
-      # 运行测试（可选，GUI 构建可能跳过）
+      # 运行测试（可选）
       - name: Run pyhook tests
         run: |
           cd fontforge
@@ -138,11 +161,9 @@ jobs:
             Get-Item "$vcpkgBin\$dll" -ErrorAction SilentlyContinue | Copy-Item -Destination "$targetBin\" -Force
           }
           
-          # 复制 GTK3 主题和图标
           Copy-Item "$vcpkgBin\..\share\themes\*" -Destination "$targetBin\share\themes\" -Recurse -Force -ErrorAction SilentlyContinue
           Copy-Item "$vcpkgBin\..\share\icons\*" -Destination "$targetBin\share\icons\" -Recurse -Force -ErrorAction SilentlyContinue
           
-          # 创建 GTK3 设置
           New-Item -ItemType Directory -Force -Path "$targetBin\etc\gtk-3.0"
           @"
           [Settings]
