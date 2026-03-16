@@ -108,20 +108,54 @@ jobs:
             --x-install-root="$installRoot" `
             --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite"
           
-          # 验证 pkgconf 安装
-          $pkgConfigExe = "$installRoot\x64-windows\tools\pkgconf\pkg-config.exe"
+          # 验证 pkgconf 安装 - 搜索所有可能的位置
           Write-Host "=== Verifying pkgconf installation ==="
-          Write-Host "Looking for: $pkgConfigExe"
+          $pkgConfigExe = $null
+          $possiblePaths = @(
+            "$installRoot\x64-windows\tools\pkgconf\pkg-config.exe",
+            "$installRoot\x64-windows\tools\pkgconf\bin\pkg-config.exe",
+            "$installRoot\x64-windows\tools\pkgconf\pkgconf.exe",
+            "$installRoot\x64-windows\bin\pkg-config.exe",
+            "$installRoot\x64-windows\tools\pkg-config.exe"
+          )
           
-          if (Test-Path $pkgConfigExe) {
-            Write-Host "✓ pkgconf installed successfully!"
-            & $pkgConfigExe --version
-          } else {
-            Write-Host "::error::pkgconf installation failed!"
-            Write-Host "Listing tools directory:"
-            Get-ChildItem -Path "$installRoot\x64-windows\tools" -Directory -ErrorAction SilentlyContinue | Select-Object Name
+          foreach ($path in $possiblePaths) {
+            Write-Host "Checking: $path"
+            if (Test-Path $path) {
+              $pkgConfigExe = $path
+              Write-Host "✓ Found pkg-config at: $pkgConfigExe"
+              break
+            }
+          }
+          
+          # 如果还没找到，递归搜索
+          if (-not $pkgConfigExe) {
+            Write-Host "Searching recursively..."
+            $searchResult = Get-ChildItem -Path "$installRoot\x64-windows" -Recurse -Filter "*pkg-config*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($searchResult) {
+              $pkgConfigExe = $searchResult.FullName
+              Write-Host "✓ Found via search: $pkgConfigExe"
+            }
+          }
+          
+          # 再搜索 pkgconf.exe (某些版本用这个)
+          if (-not $pkgConfigExe) {
+            $searchResult = Get-ChildItem -Path "$installRoot\x64-windows" -Recurse -Filter "pkgconf.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($searchResult) {
+              $pkgConfigExe = $searchResult.FullName
+              Write-Host "✓ Found pkgconf.exe: $pkgConfigExe"
+            }
+          }
+          
+          if (-not $pkgConfigExe) {
+            Write-Host "::error::pkg-config executable not found!"
+            Write-Host "Listing pkgconf directory:"
+            Get-ChildItem -Path "$installRoot\x64-windows\tools\pkgconf" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
             exit 1
           }
+          
+          # 保存 pkg-config 路径供后续步骤使用
+          "PKG_CONFIG_EXECUTABLE=$pkgConfigExe" | Out-File -FilePath "$env:GITHUB_WORKSPACE\pkg-config-path.txt" -Encoding UTF8
           
           # 步骤 2: 再用 manifest 模式安装其他依赖
           Write-Host "=== Step 2: Installing other dependencies (manifest mode) ==="
@@ -140,16 +174,15 @@ jobs:
         run: |
           Write-Host "=== Setting up pkg-config ==="
           
+          # 读取之前保存的 pkg-config 路径
+          $pkgConfigExe = Get-Content "$env:GITHUB_WORKSPACE\pkg-config-path.txt"
           $vcpkgInstalled = "$env:GITHUB_WORKSPACE\fontforge\build\vcpkg_installed\x64-windows"
-          $pkgConfigExe = "$vcpkgInstalled\tools\pkgconf\pkg-config.exe"
           
-          Write-Host "vcpkg_installed: $vcpkgInstalled"
           Write-Host "pkg-config: $pkgConfigExe"
+          Write-Host "vcpkg_installed: $vcpkgInstalled"
           
           if (-not (Test-Path $pkgConfigExe)) {
-            Write-Host "::error::pkg-config not found!"
-            Write-Host "Available tools:"
-            Get-ChildItem -Path "$vcpkgInstalled\tools" -Directory -ErrorAction SilentlyContinue | Select-Object Name
+            Write-Host "::error::pkg-config not found at saved path!"
             exit 1
           }
           
