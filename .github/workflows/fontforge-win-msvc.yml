@@ -20,6 +20,29 @@ jobs:
           ref: master
           path: fontforge
 
+      # 🔥 新增：拉取并编译 libspiro 官方源码
+      - name: Checkout and Build libspiro
+        run: |
+          # 1. 拉取 libspiro 源码（FontForge 官方维护）
+          git clone https://github.com/fontforge/libspiro.git
+          cd libspiro
+          
+          # 2. 准备路径（统一正斜杠，避免转义错误）
+          $installPath = "$PWD/install" -replace '\\', '/'
+          New-Item -ItemType Directory -Force -Path $installPath/include, $installPath/lib
+          
+          # 3. 用 MSVC 编译（源码极简，只有3个核心文件，直接编译成静态库）
+          cl.exe /c /O2 /W3 /I. spiro.c bezctx.c spiroentrypoints.c
+          lib.exe /OUT:spiro.lib spiro.obj bezctx.obj spiroentrypoints.obj
+          
+          # 4. 安装头文件和库文件
+          Copy-Item spiro.h, bezctx.h, bezctx_intf.h, spiroentrypoints.h -Destination "$installPath/include"
+          Copy-Item spiro.lib -Destination "$installPath/lib"
+          
+          # 5. 输出路径到环境变量，给后续步骤使用
+          echo "LIBSPIRO_ROOT=$installPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "libspiro built and installed to: $installPath"
+
       # 恢复 vcpkg 缓存
       - name: Restore vcpkg binary cache
         id: vcpkg-cache
@@ -43,7 +66,7 @@ jobs:
       # 🔥 关键：手动安装 pkgconf 和 gettext 工具
       - name: Manually Install Tools via vcpkg
         run: |
-         vcpkg install pkgconf:x64-windows gettext:x64-windows glib:x64-windows libspiro:x64-windows freetype:x64-windows libxml2:x64-windows libpng:x64-windows giflib:x64-windows libjpeg-turbo:x64-windows tiff:x64-windows cairo:x64-windows pango:x64-windows harfbuzz:x64-windows woff2:x64-windows
+         vcpkg install pkgconf:x64-windows gettext:x64-windows glib:x64-windows 
 
 
       # 初始化 MSVC x64 环境
@@ -58,24 +81,39 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: Inject All Dependencies Manually
+      # 终极依赖注入：包含 libspiro 路径
+      - name: Inject All Dependencies into CMakeLists
         run: |
           cd fontforge
           
           # 1. 准备路径
           $vcpkg = $env:VCPKG_ROOT -replace '\\', '/'
           $inst = "$vcpkg/installed/x64-windows"
+          $libspiro = $env:LIBSPIRO_ROOT -replace '\\', '/' # 读取上一步编译的 libspiro 路径
           
-          # 2. 替换 FindGLIB.cmake
-          $newFindGLIB = @"
-          # THIS FILE IS REPLACED BY CI
+          # 2. 构造强制注入的 CMake 代码
+          $hardcode = @"
+          # =============== INJECTED BY CI ===============
+          # 禁用 PkgConfig 检查，彻底避免报错
+          set(PkgConfig_FOUND TRUE CACHE BOOL "" FORCE)
+          set(PKG_CONFIG_EXECUTABLE "$inst/tools/pkgconf/pkgconf.exe" CACHE FILEPATH "" FORCE)
+          
+          # Intl / Gettext
+          set(Intl_INCLUDE_DIR "$inst/include" CACHE PATH "" FORCE)
+          set(Intl_LIBRARY "$inst/lib/intl.lib" CACHE FILEPATH "" FORCE)
+          set(Intl_FOUND TRUE CACHE BOOL "" FORCE)
+          set(GETTEXT_MSGMERGE_EXECUTABLE "$inst/tools/gettext/bin/msgmerge.exe" CACHE FILEPATH "" FORCE)
+          set(GETTEXT_MSGFMT_EXECUTABLE "$inst/tools/gettext/bin/msgfmt.exe" CACHE FILEPATH "" FORCE)
+          
+          # GLIB 完整配置（含目标）
           set(GLIB_INCLUDE_DIRS "$inst/include/glib-2.0;$inst/lib/glib-2.0/include" CACHE PATH "" FORCE)
           set(GLIB_LIBRARIES "$inst/lib/glib-2.0.lib" CACHE FILEPATH "" FORCE)
           set(GLIB_GIO_LIBRARIES "$inst/lib/gio-2.0.lib" CACHE FILEPATH "" FORCE)
           set(GLIB_GOBJECT_LIBRARIES "$inst/lib/gobject-2.0.lib" CACHE FILEPATH "" FORCE)
-          set(GLIB_VERSION "2.76.0" CACHE STRING "" FORCE)
+          set(GLIB_VERSION "2.80.0" CACHE STRING "" FORCE)
           set(GLIB_VERSION_OK TRUE CACHE BOOL "" FORCE)
           set(GLIB_FOUND TRUE CACHE BOOL "" FORCE)
+          
           if(NOT TARGET GLIB2::GLIB2)
             add_library(GLIB2::GLIB2 UNKNOWN IMPORTED)
             set_target_properties(GLIB2::GLIB2 PROPERTIES IMPORTED_LOCATION "$inst/lib/glib-2.0.lib" INTERFACE_INCLUDE_DIRECTORIES "$inst/include/glib-2.0;$inst/lib/glib-2.0/include")
@@ -88,85 +126,30 @@ jobs:
             add_library(GLIB2::GOBJECT UNKNOWN IMPORTED)
             set_target_properties(GLIB2::GOBJECT PROPERTIES IMPORTED_LOCATION "$inst/lib/gobject-2.0.lib" INTERFACE_INCLUDE_DIRECTORIES "$inst/include/glib-2.0;$inst/lib/glib-2.0/include")
           endif()
-          "@
-          $newFindGLIB | Set-Content "cmake/packages/FindGLIB.cmake"
           
-          # 3. 处理主 CMakeLists.txt
-          $cmakeContent = Get-Content "CMakeLists.txt" -Raw
-          $cmakeContent = $cmakeContent -replace 'find_package\(PkgConfig[^\)]*\)', ''
-          $cmakeContent = $cmakeContent -replace 'pkg_check_modules\(', '# pkg_check_modules('
-          
-          # 4. 🔥 注入所有可能的依赖库路径
-          $hardcode = @"
-          # =============== INJECTED BY CI ===============
-          # Basic setup
-          set(CMAKE_PREFIX_PATH "$inst" CACHE PATH "" FORCE)
-          
-          # Intl / Gettext
-          set(Intl_INCLUDE_DIR "$inst/include" CACHE PATH "" FORCE)
-          set(Intl_LIBRARY "$inst/lib/intl.lib" CACHE FILEPATH "" FORCE)
-          set(Intl_FOUND TRUE CACHE BOOL "" FORCE)
-          set(GETTEXT_MSGMERGE_EXECUTABLE "$inst/tools/gettext/bin/msgmerge.exe" CACHE FILEPATH "" FORCE)
-          set(GETTEXT_MSGFMT_EXECUTABLE "$inst/tools/gettext/bin/msgfmt.exe" CACHE FILEPATH "" FORCE)
-          
-          # Libspiro (Current Blocker)
-          set(Libspiro_INCLUDE_DIRS "$inst/include" CACHE PATH "" FORCE)
-          set(Libspiro_LIBRARIES "$inst/lib/libspiro.lib" CACHE FILEPATH "" FORCE)
+          # 🔥 libspiro 配置（开启 ENABLE_LIBSPIRO 的核心）
+          set(Libspiro_INCLUDE_DIRS "$libspiro/include" CACHE PATH "" FORCE)
+          set(Libspiro_LIBRARIES "$libspiro/lib/spiro.lib" CACHE FILEPATH "" FORCE)
           set(Libspiro_FOUND TRUE CACHE BOOL "" FORCE)
+          set(LIBSPIRO_VERSION "20240903" CACHE STRING "" FORCE)
+          set(LIBSPIRO_VERSION_OK TRUE CACHE BOOL "" FORCE)
           
-          # Freetype
-          set(Freetype_INCLUDE_DIRS "$inst/include/freetype2" CACHE PATH "" FORCE)
-          set(Freetype_LIBRARIES "$inst/lib/freetype.lib" CACHE FILEPATH "" FORCE)
-          set(Freetype_FOUND TRUE CACHE BOOL "" FORCE)
-          
-          # LibXML2
-          set(LibXml2_INCLUDE_DIRS "$inst/include/libxml2" CACHE PATH "" FORCE)
-          set(LibXml2_LIBRARIES "$inst/lib/libxml2.lib" CACHE FILEPATH "" FORCE)
-          set(LibXml2_FOUND TRUE CACHE BOOL "" FORCE)
-          
-          # GIF, JPEG, PNG, TIFF
-          set(GIF_INCLUDE_DIRS "$inst/include" CACHE PATH "" FORCE)
-          set(GIF_LIBRARIES "$inst/lib/gif.lib" CACHE FILEPATH "" FORCE)
-          set(GIF_FOUND TRUE CACHE BOOL "" FORCE)
-          
-          set(JPEG_INCLUDE_DIRS "$inst/include" CACHE PATH "" FORCE)
-          set(JPEG_LIBRARIES "$inst/lib/jpeg.lib" CACHE FILEPATH "" FORCE)
-          set(JPEG_FOUND TRUE CACHE BOOL "" FORCE)
-          
-          set(PNG_INCLUDE_DIRS "$inst/include" CACHE PATH "" FORCE)
-          set(PNG_LIBRARIES "$inst/lib/libpng16.lib" CACHE FILEPATH "" FORCE)
-          set(PNG_FOUND TRUE CACHE BOOL "" FORCE)
-          
-          set(TIFF_INCLUDE_DIRS "$inst/include" CACHE PATH "" FORCE)
-          set(TIFF_LIBRARIES "$inst/lib/tiff.lib" CACHE FILEPATH "" FORCE)
-          set(TIFF_FOUND TRUE CACHE BOOL "" FORCE)
-          
-          # Cairo, Pango, Harfbuzz (for GUI)
-          set(CAIRO_INCLUDE_DIRS "$inst/include/cairo" CACHE PATH "" FORCE)
-          set(CAIRO_LIBRARIES "$inst/lib/cairo.lib" CACHE FILEPATH "" FORCE)
-          set(CAIRO_FOUND TRUE CACHE BOOL "" FORCE)
-          
-          # Harfbuzz
-          set(HARFBUZZ_INCLUDE_DIRS "$inst/include/harfbuzz" CACHE PATH "" FORCE)
-          set(HARFBUZZ_LIBRARIES "$inst/lib/harfbuzz.lib" CACHE FILEPATH "" FORCE)
-          set(HARFBUZZ_FOUND TRUE CACHE BOOL "" FORCE)
-          
-          # Pango
-          set(Pango_INCLUDE_DIRS "$inst/include/pango-1.0" CACHE PATH "" FORCE)
-          set(Pango_LIBRARIES "$inst/lib/pango-1.0.lib;$inst/lib/pangowin32-1.0.lib;$inst/lib/pangocairo-1.0.lib" CACHE FILEPATH "" FORCE)
-          set(Pango_FOUND TRUE CACHE BOOL "" FORCE)
-          
-          # WOFF2
-          set(WOFF2_INCLUDE_DIRS "$inst/include" CACHE PATH "" FORCE)
-          set(WOFF2_LIBRARIES "$inst/lib/woff2enc.lib;$inst/lib/woff2common.lib;$inst/lib/brotlienc.lib" CACHE FILEPATH "" FORCE)
-          set(WOFF2_FOUND TRUE CACHE BOOL "" FORCE)
+          if(NOT TARGET Libspiro::Libspiro)
+            add_library(Libspiro::Libspiro UNKNOWN IMPORTED)
+            set_target_properties(Libspiro::Libspiro PROPERTIES IMPORTED_LOCATION "$libspiro/lib/spiro.lib" INTERFACE_INCLUDE_DIRECTORIES "$libspiro/include")
+          endif()
           # =============== END INJECTION ===============
           
           "@
           
+          # 3. 注入到 CMakeLists.txt 开头，并删除 PkgConfig 调用
+          $cmakeContent = Get-Content "CMakeLists.txt" -Raw
+          $cmakeContent = $cmakeContent -replace 'find_package\(PkgConfig[^\)]*\)', ''
+          $cmakeContent = $cmakeContent -replace 'pkg_check_modules\(', '# pkg_check_modules('
+          
           $hardcode + $cmakeContent | Set-Content "CMakeLists.txt"
           
-          Write-Host "Injected paths for all known dependencies."
+          Write-Host "All dependencies injected, including libspiro"
 
       # 进入源码目录编译（核心！）
       - name: Configure CMake
