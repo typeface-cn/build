@@ -14,7 +14,7 @@ jobs:
       VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-cache,readwrite"
     
     steps:
-      # 🔥 拉取官方FontForge源码
+      # 🔥 拉取官方 FontForge 源码
       - name: Checkout FontForge official source
         uses: actions/checkout@v4
         with:
@@ -35,11 +35,20 @@ jobs:
       - name: Create vcpkg cache directory
         run: New-Item -ItemType Directory -Force -Path vcpkg-cache
 
-      # 配置 vcpkg（官方源码路径）
+      # 🔥 配置 vcpkg（官方源码路径）
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgJsonGlob: 'fontforge/vcpkg.json'
+
+      # 🔥 关键修复：安装 pkgconf（提供 pkg-config.exe）
+      - name: Install pkgconf via vcpkg
+        run: |
+          & "$env:VCPKG_ROOT\vcpkg.exe" install pkgconf:x64-windows
+          # 将 pkg-config.exe 添加到 PATH
+          $pkgConfigPath = "$env:VCPKG_ROOT\packages\pkgconf_x64-windows\tools\pkgconf"
+          echo "$pkgConfigPath" >> $env:GITHUB_PATH
+        shell: pwsh
 
       # 初始化 MSVC x64 环境
       - name: Setup MSVC
@@ -53,7 +62,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      # 🔥 核心修改：启用GUI的CMake配置
+      # 🔥 核心修改：启用 GUI 的 CMake 配置
       - name: Configure CMake (WITH GUI)
         run: |
           cd fontforge
@@ -69,7 +78,8 @@ jobs:
             -DENABLE_WOFF2=ON `
             -DENABLE_DOCS=OFF `
             -DBUILD_SHARED_LIBS=ON `
-            -DUSE_GTK3=ON
+            -DUSE_GTK3=ON `
+            -DPKG_CONFIG_EXECUTABLE="$env:VCPKG_ROOT\packages\pkgconf_x64-windows\tools\pkgconf\pkg-config.exe"
         shell: pwsh
 
       # 编译 FontForge
@@ -79,7 +89,7 @@ jobs:
           cmake --build build --config Release
         shell: pwsh
 
-      # 运行测试
+      # 运行测试（可选，GUI 构建可能跳过）
       - name: Run pyhook tests
         run: |
           cd fontforge
@@ -89,83 +99,50 @@ jobs:
         shell: pwsh
         continue-on-error: true
       
-      # 🔥 配置嵌入式 Python（使用已发布版本）
+      # 配置嵌入式 Python
       - name: Download and configure embedded Python 3.12.8
         run: |
           cd fontforge
-          # 创建Lib目录
           New-Item -ItemType Directory -Force -Path build/bin/Lib
-          
-          # 下载Python嵌入式包
           Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.8/python-3.12.8-embed-amd64.zip" -OutFile python-embed.zip
-          
-          # 解压到 bin/Lib
           Expand-Archive -Path python-embed.zip -DestinationPath build/bin/Lib -Force
-          
-          # 删除压缩包
           Remove-Item -Path python-embed.zip -Force
-          
-          # 移动 python312.dll 到 bin 目录
           Move-Item -Path build/bin/Lib/python312.dll -Destination build/bin/ -Force -ErrorAction SilentlyContinue
-          
-          # 移动 python312.zip 到 bin 目录  
           Move-Item -Path build/bin/Lib/python312.zip -Destination build/bin/ -Force -ErrorAction SilentlyContinue
-          
-          # 启用 site 模块（取消注释 import site）
           $pypath = "build/bin/Lib/python312._pth"
           if (Test-Path $pypath) {
             (Get-Content $pypath) -replace '^#import site', 'import site' | Set-Content $pypath
           }
         shell: pwsh
 
-      # 🔥 复制GUI运行时依赖（GTK3、Cairo等）
+      # 复制 GUI 运行时依赖
       - name: Copy GUI runtime dependencies
         run: |
           cd fontforge
           $vcpkgBin = "build\vcpkg_installed\x64-windows\bin"
           $targetBin = "build\bin"
           
-          # 复制GTK3及相关DLL
           $guiDlls = @(
-            "gtk-3-0.dll",
-            "gdk-3-0.dll",
-            "gdk_pixbuf-2.0-0.dll",
-            "pango-1.0-0.dll",
-            "pangocairo-1.0-0.dll",
-            "pangowin32-1.0-0.dll",
-            "cairo-2.dll",
-            "cairo-gobject-2.dll",
-            "glib-2.0-0.dll",
-            "gobject-2.0-0.dll",
-            "gio-2.0-0.dll",
-            "gmodule-2.0-0.dll",
-            "gthread-2.0-0.dll",
-            "intl.dll",
-            "libffi-8.dll",
-            "libpng16-16.dll",
-            "libjpeg-8.dll",
-            "libtiff-5.dll",
-            "libwebp-7.dll",
-            "freetype-6.dll",
-            "fontconfig-1.dll",
-            "expat.dll",
-            "brotli*.dll",
-            "zlib1.dll",
-            "libiconv-2.dll",
-            "libcharset-1.dll",
-            "libxml2-2.dll",
-            "libxslt-1.dll"
+            "gtk-3-0.dll", "gdk-3-0.dll", "gdk_pixbuf-2.0-0.dll",
+            "pango-1.0-0.dll", "pangocairo-1.0-0.dll", "pangowin32-1.0-0.dll",
+            "cairo-2.dll", "cairo-gobject-2.dll",
+            "glib-2.0-0.dll", "gobject-2.0-0.dll", "gio-2.0-0.dll",
+            "gmodule-2.0-0.dll", "gthread-2.0-0.dll", "intl.dll",
+            "libffi-8.dll", "libpng16-16.dll", "libjpeg-8.dll",
+            "libtiff-5.dll", "libwebp-7.dll", "freetype-6.dll",
+            "fontconfig-1.dll", "expat.dll", "zlib1.dll",
+            "libiconv-2.dll", "libxml2-2.dll", "libxslt-1.dll"
           )
           
           foreach ($dll in $guiDlls) {
             Get-Item "$vcpkgBin\$dll" -ErrorAction SilentlyContinue | Copy-Item -Destination "$targetBin\" -Force
           }
           
-          # 复制GTK3主题和图标
+          # 复制 GTK3 主题和图标
           Copy-Item "$vcpkgBin\..\share\themes\*" -Destination "$targetBin\share\themes\" -Recurse -Force -ErrorAction SilentlyContinue
           Copy-Item "$vcpkgBin\..\share\icons\*" -Destination "$targetBin\share\icons\" -Recurse -Force -ErrorAction SilentlyContinue
           
-          # 复制GTK3设置文件
+          # 创建 GTK3 设置
           New-Item -ItemType Directory -Force -Path "$targetBin\etc\gtk-3.0"
           @"
           [Settings]
@@ -175,7 +152,7 @@ jobs:
           "@ | Out-File -FilePath "$targetBin\etc\gtk-3.0\settings.ini" -Encoding UTF8
         shell: pwsh
 
-      # 🔥 创建启动脚本
+      # 创建启动脚本
       - name: Create launch script
         run: |
           cd fontforge/build/bin
