@@ -67,70 +67,83 @@ jobs:
           "PYTHON_EXECUTABLE=$pythonExe" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
         shell: pwsh
 
-      # 🔥 关键步骤：安装依赖并详细诊断
-      - name: Install vcpkg dependencies with full diagnosis
+      # 🔥 关键步骤：强制安装 pkgconf 并验证
+      - name: Force install pkgconf and verify
         run: |
           $vcpkgRoot = "$env:GITHUB_WORKSPACE\vcpkg"
           $installRoot = "$env:GITHUB_WORKSPACE\fontforge\build\vcpkg_installed"
           
           New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
           
-          Write-Host "=== Installing pkgconf ==="
-          & "$vcpkgRoot\vcpkg.exe" install pkgconf:x64-windows `
-            --x-install-root="$installRoot" `
-            --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite"
+          Write-Host "=== Step 1: Check vcpkg version ==="
+          & "$vcpkgRoot\vcpkg.exe" version
           
-          Write-Host "`n=== Installing other dependencies ==="
+          Write-Host "`n=== Step 2: Search for pkgconf in registry ==="
+          & "$vcpkgRoot\vcpkg.exe" search pkgconf
+          
+          Write-Host "`n=== Step 3: Install pkgconf:x64-windows (verbose) ==="
+          $installResult = & "$vcpkgRoot\vcpkg.exe" install pkgconf:x64-windows `
+            --x-install-root="$installRoot" `
+            --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite" `
+            --debug 2>&1
+          
+          Write-Host $installResult
+          
+          Write-Host "`n=== Step 4: Check installation status ==="
+          & "$vcpkgRoot\vcpkg.exe" list --x-install-root="$installRoot"
+          
+          Write-Host "`n=== Step 5: Check if pkgconf is installed ==="
+          $pkgconfStatus = & "$vcpkgRoot\vcpkg.exe" list pkgconf --x-install-root="$installRoot"
+          Write-Host $pkgconfStatus
+          
+          Write-Host "`n=== Step 6: Full directory scan ==="
+          Write-Host "Scanning entire install root for pkgconf..."
+          $allPkgFiles = Get-ChildItem -Path $installRoot -Recurse -Filter "*pkg*" -ErrorAction SilentlyContinue
+          if ($allPkgFiles) {
+            $allPkgFiles | ForEach-Object { Write-Host "  $($_.FullName)" }
+          } else {
+            Write-Host "  No files matching *pkg* found!"
+          }
+          
+          Write-Host "`n=== Step 7: Check for pkgconf in x64-windows ==="
+          $x64Dir = "$installRoot\x64-windows"
+          if (Test-Path $x64Dir) {
+            Write-Host "x64-windows exists. Contents:"
+            Get-ChildItem -Path $x64Dir -Recurse -Filter "*pkg*" | ForEach-Object {
+              Write-Host "  $($_.FullName)"
+            }
+          } else {
+            Write-Host "x64-windows directory does NOT exist!"
+          }
+          
+          # 查找 pkgconf.exe
+          $pkgExe = Get-ChildItem -Path $installRoot -Recurse -Filter "*pkgconf*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          
+          if ($pkgExe) {
+            Write-Host "`n✓ FOUND: $($pkgExe.FullName)"
+            $pkgExe.FullName | Out-File -FilePath "$env:GITHUB_WORKSPACE\pkgconf-path.txt" -Encoding UTF8
+          } else {
+            Write-Host "`n::error::pkgconf.exe NOT FOUND after installation!"
+            Write-Host "Installation may have failed. Check output above."
+            exit 1
+          }
+        shell: pwsh
+
+      # 🔥 安装其他依赖
+      - name: Install other vcpkg dependencies
+        run: |
+          $vcpkgRoot = "$env:GITHUB_WORKSPACE\vcpkg"
+          $installRoot = "$env:GITHUB_WORKSPACE\fontforge\build\vcpkg_installed"
+          
           cd fontforge
+          
+          Write-Host "=== Installing FontForge dependencies ==="
           & "$vcpkgRoot\vcpkg.exe" install `
             --triplet x64-windows `
             --x-install-root="$installRoot" `
             --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite"
           
-          # 🔥 详细诊断
-          Write-Host "`n========================================"
-          Write-Host "=== DIAGNOSIS: pkgconf installation ==="
-          Write-Host "========================================"
-          
-          $x64Dir = "$installRoot\x64-windows"
-          
-          Write-Host "`n1. x64-windows top-level directories:"
-          Get-ChildItem -Path $x64Dir -Directory | ForEach-Object { Write-Host "   $($_.Name)" }
-          
-          Write-Host "`n2. tools directory contents:"
-          if (Test-Path "$x64Dir\tools") {
-            Get-ChildItem -Path "$x64Dir\tools" -Directory | ForEach-Object { Write-Host "   $($_.Name)" }
-          }
-          
-          Write-Host "`n3. pkgconf directory full tree:"
-          if (Test-Path "$x64Dir\tools\pkgconf") {
-            Get-ChildItem -Path "$x64Dir\tools\pkgconf" -Recurse -File | ForEach-Object { 
-              Write-Host "   $($_.FullName)" 
-            }
-          }
-          
-          Write-Host "`n4. ALL .exe files in x64-windows:"
-          Get-ChildItem -Path $x64Dir -Recurse -Filter "*.exe" | ForEach-Object {
-            Write-Host "   $($_.FullName)"
-          }
-          
-          Write-Host "`n5. Searching for *pkg* executables:"
-          Get-ChildItem -Path $installRoot -Recurse -Filter "*pkg*.exe" | ForEach-Object {
-            Write-Host "   FOUND: $($_.FullName)"
-          }
-          
-          # 保存找到的 pkgconf 路径
-          $pkgExe = Get-ChildItem -Path $installRoot -Recurse -Filter "*pkg*.exe" | 
-            Where-Object { $_.Name -like "*pkgconf*" -or $_.Name -like "*pkg-config*" } |
-            Select-Object -First 1
-          
-          if ($pkgExe) {
-            Write-Host "`n✓ FOUND pkg-config executable: $($pkgExe.FullName)"
-            $pkgExe.FullName | Out-File -FilePath "$env:GITHUB_WORKSPACE\pkgconf-path.txt" -Encoding UTF8
-          } else {
-            Write-Host "`n::error::NO pkg-config executable found!"
-            exit 1
-          }
+          Write-Host "=== Dependencies installed ==="
         shell: pwsh
 
       - name: Configure CMake
@@ -139,14 +152,12 @@ jobs:
           $installRoot = "$env:GITHUB_WORKSPACE\fontforge\build\vcpkg_installed"
           $x64Dir = "$installRoot\x64-windows"
           
-          # 读取之前保存的 pkgconf 路径
           $pkgConfigExe = Get-Content "$env:GITHUB_WORKSPACE\pkgconf-path.txt"
           
           Write-Host "=== Configuration ==="
           Write-Host "VCPKG_ROOT: $vcpkgRoot"
           Write-Host "PKG_CONFIG_EXECUTABLE: $pkgConfigExe"
           
-          # 验证
           if (-not (Test-Path $pkgConfigExe)) {
             Write-Host "::error::pkg-config not found at: $pkgConfigExe"
             exit 1
