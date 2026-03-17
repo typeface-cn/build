@@ -67,11 +67,12 @@ jobs:
           "PYTHON_EXECUTABLE=$pythonExe" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
         shell: pwsh
 
-      # 🔥 安装所有依赖（使用绝对路径）
+      # 🔥 安装所有依赖（使用 manifest 模式）
       - name: Install vcpkg dependencies
         run: |
           $vcpkgRoot = "$env:GITHUB_WORKSPACE\vcpkg"
           $installRoot = "$env:GITHUB_WORKSPACE\fontforge\build\vcpkg_installed"
+          $fontforgeDir = "$env:GITHUB_WORKSPACE\fontforge"
           
           New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
           
@@ -83,11 +84,12 @@ jobs:
             --x-install-root="$installRoot" `
             --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite"
           
-          Write-Host "`n=== Installing FontForge dependencies ==="
+          Write-Host "`n=== Installing FontForge dependencies (manifest mode) ==="
+          # 🔥 使用 manifest 模式：在 fontforge 目录运行，自动读取 vcpkg.json
           & "$vcpkgRoot\vcpkg.exe" install `
-            --triplet x64-windows `
             --x-install-root="$installRoot" `
-            --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite"
+            --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite" `
+            --x-manifest-root="$fontforgeDir"
           
           Write-Host "`n=== Verifying pkgconf installation ==="
           $pkgconfDir = "$installRoot\x64-windows\tools\pkgconf"
@@ -106,10 +108,6 @@ jobs:
             $pkgExe | Out-File -FilePath "$env:GITHUB_WORKSPACE\pkgconf-path.txt" -Encoding UTF8
           } else {
             Write-Host "::error::pkgconf.exe NOT FOUND at: $pkgExe"
-            Write-Host "`n=== Full scan for pkgconf.exe ==="
-            Get-ChildItem -Path "$installRoot\x64-windows\tools" -Recurse -Filter "*.exe" | ForEach-Object {
-              Write-Host "  $($_.FullName)"
-            }
             exit 1
           }
         shell: pwsh
