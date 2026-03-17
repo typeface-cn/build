@@ -67,7 +67,7 @@ jobs:
           "PYTHON_EXECUTABLE=$pythonExe" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
         shell: pwsh
 
-      # 🔥 安装所有依赖（使用 manifest 模式）
+      # 🔥 安装所有依赖
       - name: Install vcpkg dependencies
         run: |
           $vcpkgRoot = "$env:GITHUB_WORKSPACE\vcpkg"
@@ -77,15 +77,11 @@ jobs:
           New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
           
           Write-Host "=== Installing pkgconf first ==="
-          Write-Host "VCPKG_ROOT: $vcpkgRoot"
-          Write-Host "INSTALL_ROOT: $installRoot"
-          
           & "$vcpkgRoot\vcpkg.exe" install pkgconf:x64-windows `
             --x-install-root="$installRoot" `
             --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite"
           
           Write-Host "`n=== Installing FontForge dependencies (manifest mode) ==="
-          # 🔥 使用 manifest 模式：在 fontforge 目录运行，自动读取 vcpkg.json
           & "$vcpkgRoot\vcpkg.exe" install `
             --x-install-root="$installRoot" `
             --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite" `
@@ -93,7 +89,6 @@ jobs:
           
           Write-Host "`n=== Verifying pkgconf installation ==="
           $pkgconfDir = "$installRoot\x64-windows\tools\pkgconf"
-          Write-Host "Checking directory: $pkgconfDir"
           
           if (Test-Path $pkgconfDir) {
             Write-Host "Directory exists. Contents:"
@@ -112,33 +107,37 @@ jobs:
           }
         shell: pwsh
 
-      # 🔥 CMake 配置
+      # 🔥 CMake 配置 - 修复：使用 -S 和 -B 明确指定源和构建目录
       - name: Configure CMake
         run: |
           $vcpkgRoot = "$env:GITHUB_WORKSPACE\vcpkg"
           $installRoot = "$env:GITHUB_WORKSPACE\fontforge\build\vcpkg_installed"
           $x64Dir = "$installRoot\x64-windows"
+          $fontforgeDir = "$env:GITHUB_WORKSPACE\fontforge"
+          $buildDir = "$fontforgeDir\build"
           
-          # 读取之前保存的 pkgconf 路径
+          # 读取 pkgconf 路径
           $pkgConfigExe = Get-Content "$env:GITHUB_WORKSPACE\pkgconf-path.txt"
           
           Write-Host "=== Configuration ==="
           Write-Host "VCPKG_ROOT: $vcpkgRoot"
+          Write-Host "INSTALL_ROOT: $installRoot"
           Write-Host "PKG_CONFIG_EXECUTABLE: $pkgConfigExe"
-          Write-Host "GITHUB_WORKSPACE: $env:GITHUB_WORKSPACE"
+          Write-Host "BUILD_DIR: $buildDir"
           
-          # 验证
+          # 验证 pkgconf
           if (-not (Test-Path $pkgConfigExe)) {
             Write-Host "::error::pkg-config not found at: $pkgConfigExe"
             exit 1
           }
           
-          Write-Host "✓ pkg-config verified"
+          Write-Host "`n=== Testing pkgconf ==="
           & $pkgConfigExe --version
           
           $pythonExe = $env:PYTHON_EXECUTABLE
           
-          cmake -B fontforge/build `
+          # 🔥 使用 -S 指定源目录，-B 指定构建目录
+          cmake -S "$fontforgeDir" -B "$buildDir" `
             -G "Ninja" `
             -DCMAKE_TOOLCHAIN_FILE="$vcpkgRoot/scripts/buildsystems/vcpkg.cmake" `
             -DCMAKE_BUILD_TYPE=Release `
@@ -159,9 +158,11 @@ jobs:
             -DVCPKG_INSTALLED_DIR="$installRoot"
         shell: pwsh
 
+      # 🔥 Build - 指定 working-directory
       - name: Build FontForge
-        run: cmake --build fontforge/build --config Release
+        run: cmake --build build --config Release
         shell: pwsh
+        working-directory: fontforge
 
       - name: Upload FontForge Build Artifacts
         uses: actions/upload-artifact@v4
