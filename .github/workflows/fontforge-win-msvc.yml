@@ -44,6 +44,21 @@ jobs:
           "VCPKG_DEFAULT_TRIPLET=x64-windows" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
         shell: pwsh
 
+      # 🔥 使用 MSYS2 的 pkg-config（更可靠）
+      - name: Install MSYS2 and pkg-config
+        run: |
+          & "C:\msys64\usr\bin\bash.exe" -lc "pacman -S --noconfirm mingw-w64-x86_64-pkgconf"
+          $pkgConfigExe = "C:\msys64\mingw64\bin\pkgconf.exe"
+          if (Test-Path $pkgConfigExe) {
+            Write-Host "✓ MSYS2 pkgconf found: $pkgConfigExe"
+            & $pkgConfigExe --version
+            $pkgConfigExe | Out-File -FilePath "$env:GITHUB_WORKSPACE\pkgconf-path.txt" -Encoding UTF8
+          } else {
+            Write-Host "::error::MSYS2 pkgconf not found!"
+            exit 1
+          }
+        shell: pwsh
+
       - name: Install Gettext tools from MSYS2
         run: |
           & "C:\msys64\usr\bin\bash.exe" -lc "pacman -S --noconfirm mingw-w64-x86_64-gettext"
@@ -67,7 +82,7 @@ jobs:
           "PYTHON_EXECUTABLE=$pythonExe" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
         shell: pwsh
 
-      # 🔥 安装所有依赖 - manifest 模式 + pkgconf
+      # 🔥 安装所有依赖
       - name: Install vcpkg dependencies
         run: |
           $vcpkgRoot = "$env:GITHUB_WORKSPACE\vcpkg"
@@ -76,44 +91,22 @@ jobs:
           
           New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
           
-          Write-Host "=== Step 1: Installing FontForge dependencies (manifest mode) ==="
+          Write-Host "=== Installing FontForge dependencies (manifest mode) ==="
           & "$vcpkgRoot\vcpkg.exe" install `
             --x-install-root="$installRoot" `
             --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite" `
             --x-manifest-root="$fontforgeDir"
           
-          Write-Host "`n=== Step 2: Installing pkgconf separately (required by CMake FindPkgConfig) ==="
-          # 🔥 在 manifest 安装之后再安装 pkgconf，它会被添加到已安装包中
-          & "$vcpkgRoot\vcpkg.exe" install pkgconf:x64-windows `
-            --x-install-root="$installRoot" `
-            --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite"
+          # 保存 pkg-config 路径
+          $libPkgConfig = "$installRoot\x64-windows\lib\pkgconfig"
+          $sharePkgConfig = "$installRoot\x64-windows\share\pkgconfig"
+          $pkgConfigPath = "$libPkgConfig;$sharePkgConfig"
+          Write-Host "PKG_CONFIG_PATH: $pkgConfigPath"
+          $pkgConfigPath | Out-File -FilePath "$env:GITHUB_WORKSPACE\pkgconfig-path.txt" -Encoding UTF8
           
-          Write-Host "`n=== Step 3: Finding pkgconf.exe ==="
-          $pkgconfDir = "$installRoot\x64-windows\tools\pkgconf"
-          
-          if (Test-Path $pkgconfDir) {
-            Write-Host "pkgconf directory exists. Contents:"
-            Get-ChildItem -Path $pkgconfDir | ForEach-Object { Write-Host "  $($_.Name)" }
-          }
-          
-          $pkgExe = "$pkgconfDir\pkgconf.exe"
-          if (Test-Path $pkgExe) {
-            Write-Host "✓ pkgconf.exe found: $pkgExe"
-            $pkgExe | Out-File -FilePath "$env:GITHUB_WORKSPACE\pkgconf-path.txt" -Encoding UTF8
-            
-            # 保存 pkg-config 路径
-            $libPkgConfig = "$installRoot\x64-windows\lib\pkgconfig"
-            $sharePkgConfig = "$installRoot\x64-windows\share\pkgconfig"
-            $pkgConfigPath = "$libPkgConfig;$sharePkgConfig"
-            Write-Host "PKG_CONFIG_PATH: $pkgConfigPath"
-            $pkgConfigPath | Out-File -FilePath "$env:GITHUB_WORKSPACE\pkgconfig-path.txt" -Encoding UTF8
-          } else {
-            Write-Host "::error::pkgconf.exe NOT FOUND at: $pkgExe"
-            Write-Host "`n=== Full search for pkgconf.exe ==="
-            Get-ChildItem -Path "$installRoot" -Recurse -Filter "pkgconf.exe" -ErrorAction SilentlyContinue | 
-              ForEach-Object { Write-Host "Found: $($_.FullName)" }
-            exit 1
-          }
+          Write-Host "`n=== Listing .pc files ==="
+          Get-ChildItem -Path "$installRoot\x64-windows\lib\pkgconfig" -Filter "*.pc" -ErrorAction SilentlyContinue | 
+            ForEach-Object { Write-Host "  $($_.Name)" }
         shell: pwsh
 
       # 🔥 CMake 配置
@@ -133,12 +126,10 @@ jobs:
           Write-Host "PKG_CONFIG_EXECUTABLE: $pkgConfigExe"
           Write-Host "PKG_CONFIG_PATH: $pkgConfigPath"
           
-          # 验证 pkgconf
-          if (-not (Test-Path $pkgConfigExe)) {
-            Write-Host "::error::pkg-config not found at: $pkgConfigExe"
-            exit 1
-          }
+          # 添加 MSYS2 bin 到 PATH
+          $env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
           
+          # 验证 pkgconf
           Write-Host "`n=== Testing pkgconf ==="
           & $pkgConfigExe --version
           
