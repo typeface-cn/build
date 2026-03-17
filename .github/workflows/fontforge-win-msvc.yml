@@ -60,81 +60,110 @@ jobs:
         with:
           python-version: '3.12'
 
-      # 🔥 核心步骤：配置 CMake 触发 Manifest Mode 安装
-      # 我们不在这里显式运行 "vcpkg install"，而是让 CMake 工具链文件自动处理
-      - name: Configure CMake (Triggers Manifest Install)
-        id: configure
+      # 🔥 关键步骤：Patch vcpkg.json 添加 pkgconf 依赖
+      - name: Patch vcpkg.json to add pkgconf
+        run: |
+          $vcpkgJson = "$env:GITHUB_WORKSPACE\fontforge\vcpkg.json"
+          
+          Write-Host "=== Original vcpkg.json ==="
+          Get-Content $vcpkgJson | Write-Host
+          
+          $json = Get-Content $vcpkgJson -Raw | ConvertFrom-Json
+          
+          # 检查 dependencies 是否存在
+          if (-not $json.dependencies) {
+            $json | Add-Member -MemberType NoteProperty -Name "dependencies" -Value @()
+          }
+          
+          # 检查 pkgconf 是否已存在
+          $hasPkgconf = $json.dependencies -contains "pkgconf" -or 
+                        $json.dependencies -contains "pkg-config"
+          
+          if (-not $hasPkgconf) {
+            Write-Host "`n=== Adding pkgconf to dependencies ==="
+            $json.dependencies += "pkgconf"
+            
+            # 保存修改
+            $json | ConvertTo-Json -Depth 10 | Out-File -FilePath $vcpkgJson -Encoding UTF8
+            
+            Write-Host "`n=== Modified vcpkg.json ==="
+            Get-Content $vcpkgJson | Write-Host
+          } else {
+            Write-Host "`n✓ pkgconf already in dependencies"
+          }
+        shell: pwsh
+
+      # 🔥 Manifest Mode 安装依赖
+      - name: Install dependencies (Manifest Mode)
+        run: |
+          $vcpkgRoot = "$env:GITHUB_WORKSPACE\vcpkg"
+          $fontforgeDir = "$env:GITHUB_WORKSPACE\fontforge"
+          $installRoot = "$fontforgeDir\build\vcpkg_installed"
+          
+          New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
+          
+          Write-Host "=== Installing via Manifest Mode ==="
+          & "$vcpkgRoot\vcpkg.exe" install `
+            --x-manifest-root="$fontforgeDir" `
+            --x-install-root="$installRoot" `
+            --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite"
+          
+          Write-Host "`n=== Verifying pkgconf installation ==="
+          $pkgconfExe = "$installRoot\x64-windows\tools\pkgconf\pkgconf.exe"
+          
+          if (Test-Path $pkgconfExe) {
+            Write-Host "✓ pkgconf.exe found: $pkgconfExe"
+            $pkgconfExe | Out-File -FilePath "$env:GITHUB_WORKSPACE\pkgconf_path.txt" -Encoding UTF8
+          } else {
+            # 递归查找
+            $found = Get-ChildItem -Path "$installRoot" -Recurse -Filter "pkgconf.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) {
+              Write-Host "✓ pkgconf.exe found (recursive): $($found.FullName)"
+              $found.FullName | Out-File -FilePath "$env:GITHUB_WORKSPACE\pkgconf_path.txt" -Encoding UTF8
+            } else {
+              Write-Host "::error::pkgconf.exe NOT FOUND!"
+              exit 1
+            }
+          }
+          
+          # 保存路径变量
+          $installedDir = "$installRoot\x64-windows"
+          $pkgconfDir = Split-Path (Get-Content "$env:GITHUB_WORKSPACE\pkgconf_path.txt") -Parent
+          $binDir = "$installedDir\bin"
+          $pcPath = "$installedDir\lib\pkgconfig;$installedDir\share\pkgconfig"
+          
+          $pkgconfDir | Out-File -FilePath "$env:GITHUB_WORKSPACE\pkgconf_dir.txt" -Encoding UTF8
+          $binDir | Out-File -FilePath "$env:GITHUB_WORKSPACE\bin_dir.txt" -Encoding UTF8
+          $pcPath | Out-File -FilePath "$env:GITHUB_WORKSPACE\pkgconfig_path.txt" -Encoding UTF8
+          
+          Write-Host "`nPKG_CONFIG_PATH: $pcPath"
+        shell: pwsh
+
+      # 🔥 CMake 配置
+      - name: Configure CMake
         run: |
           $vcpkgRoot = "$env:GITHUB_WORKSPACE\vcpkg"
           $fontforgeDir = "$env:GITHUB_WORKSPACE\fontforge"
           $buildDir = "$fontforgeDir\build"
           $pythonExe = (Get-Command python).Source
           
-          Write-Host "=== Starting CMake Configuration (Manifest Mode) ==="
-          Write-Host "Source: $fontforgeDir"
-          Write-Host "Build: $buildDir"
+          $pkgconfExe = Get-Content "$env:GITHUB_WORKSPACE\pkgconf_path.txt"
+          $pkgconfDir = Get-Content "$env:GITHUB_WORKSPACE\pkgconf_dir.txt"
+          $binDir = Get-Content "$env:GITHUB_WORKSPACE\bin_dir.txt"
+          $pcPath = Get-Content "$env:GITHUB_WORKSPACE\pkgconfig_path.txt"
           
-          # 第一次运行 CMake 会触发 vcpkg 安装依赖
-          # 我们故意先让它失败，以便捕获 pkgconf 的路径，或者尝试直接配置
-          # 但为了稳健，我们先手动触发一次 manifest 安装以确保包到位
+          Write-Host "=== Configuration ==="
+          Write-Host "VCPKG_ROOT: $vcpkgRoot"
+          Write-Host "PKG_CONFIG_EXECUTABLE: $pkgconfExe"
+          Write-Host "PKG_CONFIG_PATH: $pcPath"
           
-          Write-Host "`n=== Pre-installing dependencies via Manifest Mode ==="
-          & "$vcpkgRoot\vcpkg.exe" install `
-            --x-manifest-root="$fontforgeDir" `
-            --x-install-root="$fontforgeDir\build\vcpkg_installed" `
-            --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite"
-          
-          Write-Host "`n=== Locating pkgconf.exe ==="
-          $installedDir = "$fontforgeDir\build\vcpkg_installed\x64-windows"
-          $pkgconfExe = "$installedDir\tools\pkgconf\pkgconf.exe"
-          
-          if (-not (Test-Path $pkgconfExe)) {
-            # 尝试递归查找
-            $found = Get-ChildItem -Path "$fontforgeDir\build\vcpkg_installed" -Recurse -Filter "pkgconf.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($found) {
-              $pkgconfExe = $found.FullName
-              Write-Host "Found pkgconf.exe at: $pkgconfExe"
-            } else {
-              Write-Host "::error::pkgconf.exe not found in vcpkg installed directory!"
-              exit 1
-            }
-          } else {
-            Write-Host "Found pkgconf.exe at: $pkgconfExe"
-          }
-          
-          # 🔥 关键修复：验证 pkgconf 是否能运行
-          # 如果直接运行失败，通常是因为缺少 PATH 中的依赖 DLL
-          $pkgconfDir = Split-Path $pkgconfExe -Parent
-          $binDir = "$installedDir\bin"
-          
-          # 临时更新 PATH 以包含 pkgconf 目录和 bin 目录
-          $oldPath = $env:PATH
+          # 🔥 关键：设置 PATH 包含 pkgconf 目录和 bin 目录
           $env:PATH = "$pkgconfDir;$binDir;$env:PATH"
           
-          Write-Host "`n=== Testing pkgconf execution ==="
-          try {
-            $version = & $pkgconfExe --version
-            Write-Host "pkgconf version: $version"
-            Write-Host "✓ pkgconf is executable!"
-          } catch {
-            Write-Host "::error::Failed to execute pkgconf.exe. Error: $_"
-            Write-Host "Current PATH includes: $pkgconfDir"
-            exit 1
-          }
+          # 验证 pkgconf 可执行
+          Write-Host "`n=== Testing pkgconf ==="
+          & $pkgconfExe --version
           
-          # 恢复 PATH (稍后在 cmake 命令中会再次设置)
-          $env:PATH = $oldPath
-          
-          # 保存变量供下一步使用
-          $pkgconfExe | Out-File -FilePath "$env:GITHUB_WORKSPACE\pkgconf_path.txt" -Encoding UTF8
-          $pkgconfDir | Out-File -FilePath "$env:GITHUB_WORKSPACE\pkgconf_dir.txt" -Encoding UTF8
-          $binDir | Out-File -FilePath "$env:GITHUB_WORKSPACE\bin_dir.txt" -Encoding UTF8
-          
-          # 设置 PKG_CONFIG_PATH
-          $pcPath = "$installedDir\lib\pkgconfig;$installedDir\share\pkgconfig"
-          $pcPath | Out-File -FilePath "$env:GITHUB_WORKSPACE\pkgconfig_path.txt" -Encoding UTF8
-          
-          Write-Host "`n=== Running CMake Configure ==="
           cmake -S "$fontforgeDir" -B "$buildDir" `
             -G "Ninja" `
             -DCMAKE_TOOLCHAIN_FILE="$vcpkgRoot/scripts/buildsystems/vcpkg.cmake" `
@@ -154,12 +183,10 @@ jobs:
             -DGETTEXT_MSGMERGE_EXECUTABLE="$env:GETTEXT_MSGMERGE_EXECUTABLE" `
             -DGETTEXT_MSGFMT_EXECUTABLE="$env:GETTEXT_MSGFMT_EXECUTABLE" `
             -DVCPKG_INSTALLED_DIR="$fontforgeDir\build\vcpkg_installed"
-            
         shell: pwsh
 
       - name: Build FontForge
         run: |
-          # 构建时需要确保 PATH 包含 pkgconf 依赖
           $pkgconfDir = Get-Content "$env:GITHUB_WORKSPACE\pkgconf_dir.txt"
           $binDir = Get-Content "$env:GITHUB_WORKSPACE\bin_dir.txt"
           $env:PATH = "$pkgconfDir;$binDir;$env:PATH"
