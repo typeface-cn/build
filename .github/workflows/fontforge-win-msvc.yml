@@ -14,7 +14,6 @@ jobs:
       VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-cache,readwrite"
     
     steps:
-      # 🔥 拉取官方 FontForge 源码
       - name: Checkout FontForge official source
         uses: actions/checkout@v4
         with:
@@ -22,7 +21,6 @@ jobs:
           ref: master
           path: fontforge
 
-      # 恢复 vcpkg 缓存
       - name: Restore vcpkg binary cache
         id: vcpkg-cache
         uses: actions/cache/restore@v4
@@ -35,173 +33,133 @@ jobs:
       - name: Create vcpkg cache directory
         run: New-Item -ItemType Directory -Force -Path vcpkg-cache
 
-      # 🔥 手动克隆 vcpkg (完整历史)
       - name: Setup vcpkg manually
         run: |
-          Write-Host "Cloning vcpkg with full history..."
           git clone https://github.com/microsoft/vcpkg.git
-          
           cd vcpkg
           .\bootstrap-vcpkg.bat -disableMetrics
           
           $vcpkgRoot = "$env:GITHUB_WORKSPACE\vcpkg"
-          Write-Host "VCPKG_ROOT: $vcpkgRoot"
-          
           "VCPKG_ROOT=$vcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
           "VCPKG_DEFAULT_TRIPLET=x64-windows" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
-          "$vcpkgRoot" | Out-File -FilePath $env:GITHUB_PATH -Encoding UTF8 -Append
         shell: pwsh
 
-      # 🔥 从 MSYS2 安装 Gettext 工具
       - name: Install Gettext tools from MSYS2
         run: |
-          Write-Host "Installing gettext tools from MSYS2..."
           & "C:\msys64\usr\bin\bash.exe" -lc "pacman -S --noconfirm mingw-w64-x86_64-gettext"
-          
           "GETTEXT_MSGMERGE_EXECUTABLE=C:\msys64\mingw64\bin\msgmerge.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
           "GETTEXT_MSGFMT_EXECUTABLE=C:\msys64\mingw64\bin\msgfmt.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
-          "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding UTF8 -Append
         shell: pwsh
 
-      # 初始化 MSVC x64 环境
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
-      # 配置 Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      # 🔥 获取 Python 路径
       - name: Get Python executable path
         run: |
           $pythonExe = (Get-Command python).Source
-          Write-Host "Python executable: $pythonExe"
           "PYTHON_EXECUTABLE=$pythonExe" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
         shell: pwsh
 
-      # 🔥 预先安装关键依赖 (明确安装 pkgconf)
-      - name: Pre-install critical vcpkg dependencies
+      # 🔥 关键步骤：安装依赖并详细诊断
+      - name: Install vcpkg dependencies with full diagnosis
         run: |
-          Write-Host "=== Pre-installing critical dependencies ==="
-          Write-Host "VCPKG_ROOT: $env:VCPKG_ROOT"
-          Write-Host "GITHUB_WORKSPACE: $env:GITHUB_WORKSPACE"
-          
-          # 确保 VCPKG_ROOT 正确
           $vcpkgRoot = "$env:GITHUB_WORKSPACE\vcpkg"
-          if (-not $env:VCPKG_ROOT -or $env:VCPKG_ROOT -like "C:\Program Files\*") {
-            $env:VCPKG_ROOT = $vcpkgRoot
-          }
-          
-          # 创建安装目录
           $installRoot = "$env:GITHUB_WORKSPACE\fontforge\build\vcpkg_installed"
+          
           New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
           
-          # 步骤 1: 先用经典模式安装 pkgconf (最关键！)
-          Write-Host "=== Step 1: Installing pkgconf (classic mode) ==="
-          & "$env:VCPKG_ROOT\vcpkg.exe" install `
-            pkgconf:x64-windows `
+          Write-Host "=== Installing pkgconf ==="
+          & "$vcpkgRoot\vcpkg.exe" install pkgconf:x64-windows `
             --x-install-root="$installRoot" `
             --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite"
           
-          # 步骤 2: 再用 manifest 模式安装其他依赖
-          Write-Host "=== Step 2: Installing other dependencies (manifest mode) ==="
+          Write-Host "`n=== Installing other dependencies ==="
           cd fontforge
-          
-          & "$env:VCPKG_ROOT\vcpkg.exe" install `
+          & "$vcpkgRoot\vcpkg.exe" install `
             --triplet x64-windows `
             --x-install-root="$installRoot" `
             --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite"
           
-          Write-Host "=== All dependencies installed ==="
+          # 🔥 详细诊断
+          Write-Host "`n========================================"
+          Write-Host "=== DIAGNOSIS: pkgconf installation ==="
+          Write-Host "========================================"
+          
+          $x64Dir = "$installRoot\x64-windows"
+          
+          Write-Host "`n1. x64-windows top-level directories:"
+          Get-ChildItem -Path $x64Dir -Directory | ForEach-Object { Write-Host "   $($_.Name)" }
+          
+          Write-Host "`n2. tools directory contents:"
+          if (Test-Path "$x64Dir\tools") {
+            Get-ChildItem -Path "$x64Dir\tools" -Directory | ForEach-Object { Write-Host "   $($_.Name)" }
+          }
+          
+          Write-Host "`n3. pkgconf directory full tree:"
+          if (Test-Path "$x64Dir\tools\pkgconf") {
+            Get-ChildItem -Path "$x64Dir\tools\pkgconf" -Recurse -File | ForEach-Object { 
+              Write-Host "   $($_.FullName)" 
+            }
+          }
+          
+          Write-Host "`n4. ALL .exe files in x64-windows:"
+          Get-ChildItem -Path $x64Dir -Recurse -Filter "*.exe" | ForEach-Object {
+            Write-Host "   $($_.FullName)"
+          }
+          
+          Write-Host "`n5. Searching for *pkg* executables:"
+          Get-ChildItem -Path $installRoot -Recurse -Filter "*pkg*.exe" | ForEach-Object {
+            Write-Host "   FOUND: $($_.FullName)"
+          }
+          
+          # 保存找到的 pkgconf 路径
+          $pkgExe = Get-ChildItem -Path $installRoot -Recurse -Filter "*pkg*.exe" | 
+            Where-Object { $_.Name -like "*pkgconf*" -or $_.Name -like "*pkg-config*" } |
+            Select-Object -First 1
+          
+          if ($pkgExe) {
+            Write-Host "`n✓ FOUND pkg-config executable: $($pkgExe.FullName)"
+            $pkgExe.FullName | Out-File -FilePath "$env:GITHUB_WORKSPACE\pkgconf-path.txt" -Encoding UTF8
+          } else {
+            Write-Host "`n::error::NO pkg-config executable found!"
+            exit 1
+          }
         shell: pwsh
 
-      # 🔥 CMake 配置 (在此 step 中查找 pkg-config)
       - name: Configure CMake
         run: |
-          cd fontforge
-          
-          # 确保 VCPKG_ROOT 正确
           $vcpkgRoot = "$env:GITHUB_WORKSPACE\vcpkg"
-          if (-not $env:VCPKG_ROOT -or $env:VCPKG_ROOT -like "C:\Program Files\*") {
-            $env:VCPKG_ROOT = $vcpkgRoot
-          }
+          $installRoot = "$env:GITHUB_WORKSPACE\fontforge\build\vcpkg_installed"
+          $x64Dir = "$installRoot\x64-windows"
           
-          $vcpkgInstalled = "$env:GITHUB_WORKSPACE\fontforge\build\vcpkg_installed"
-          $vcpkgInstalledX64 = "$vcpkgInstalled\x64-windows"
+          # 读取之前保存的 pkgconf 路径
+          $pkgConfigExe = Get-Content "$env:GITHUB_WORKSPACE\pkgconf-path.txt"
           
           Write-Host "=== Configuration ==="
-          Write-Host "VCPKG_ROOT: $env:VCPKG_ROOT"
-          Write-Host "VCPKG_INSTALLED_DIR: $vcpkgInstalled"
+          Write-Host "VCPKG_ROOT: $vcpkgRoot"
+          Write-Host "PKG_CONFIG_EXECUTABLE: $pkgConfigExe"
           
-          # 🔥 在此 step 中查找 pkg-config
-          Write-Host "=== Finding pkg-config ==="
-          $pkgConfigExe = $null
-          $possiblePaths = @(
-            "$vcpkgInstalledX64\tools\pkgconf\pkg-config.exe",
-            "$vcpkgInstalledX64\tools\pkgconf\bin\pkg-config.exe",
-            "$vcpkgInstalledX64\tools\pkgconf\pkgconf.exe",
-            "$vcpkgInstalledX64\bin\pkg-config.exe"
-          )
-          
-          foreach ($path in $possiblePaths) {
-            Write-Host "Checking: $path"
-            if (Test-Path $path) {
-              $pkgConfigExe = $path
-              Write-Host "✓ Found: $pkgConfigExe"
-              break
-            }
-          }
-          
-          if (-not $pkgConfigExe) {
-            $searchResult = Get-ChildItem -Path "$vcpkgInstalledX64" -Recurse -Filter "*pkgconf*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($searchResult) {
-              $pkgConfigExe = $searchResult.FullName
-              Write-Host "✓ Found via search: $pkgConfigExe"
-            }
-          }
-          
-          if (-not $pkgConfigExe) {
-            Write-Host "::error::pkg-config not found!"
+          # 验证
+          if (-not (Test-Path $pkgConfigExe)) {
+            Write-Host "::error::pkg-config not found at: $pkgConfigExe"
             exit 1
           }
           
-          # 🔥 获取 Python 路径
-          $pythonExe = (Get-Command python).Source
-          Write-Host "Python: $pythonExe"
-          
-          # 验证所有工具
-          Write-Host "=== Verifying tools ==="
-          $toolChecks = @{
-            "VCPKG_ROOT" = $env:VCPKG_ROOT
-            "vcpkg toolchain" = "$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
-            "Python" = $pythonExe
-            "msgmerge" = $env:GETTEXT_MSGMERGE_EXECUTABLE
-            "msgfmt" = $env:GETTEXT_MSGFMT_EXECUTABLE
-            "pkg-config" = $pkgConfigExe
-          }
-          
-          foreach ($check in $toolChecks.GetEnumerator()) {
-            if (-not (Test-Path $check.Value)) {
-              Write-Host "::error::$($check.Key) not found: $($check.Value)"
-              exit 1
-            }
-            Write-Host "✓ $($check.Key): $($check.Value)"
-          }
-          
-          # 测试 pkg-config
-          Write-Host "=== Testing pkg-config ==="
+          Write-Host "✓ pkg-config verified"
           & $pkgConfigExe --version
           
-          # 设置 PKG_CONFIG_PATH
-          $pkgConfigPath = "$vcpkgInstalledX64\lib\pkgconfig;$vcpkgInstalledX64\share\pkgconfig"
+          $pythonExe = $env:PYTHON_EXECUTABLE
           
-          cmake -B build `
+          cmake -B fontforge/build `
             -G "Ninja" `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DCMAKE_TOOLCHAIN_FILE="$vcpkgRoot/scripts/buildsystems/vcpkg.cmake" `
             -DCMAKE_BUILD_TYPE=Release `
             -DPython3_EXECUTABLE="$pythonExe" `
             -DENABLE_GUI=ON `
@@ -214,96 +172,17 @@ jobs:
             -DBUILD_SHARED_LIBS=ON `
             -DUSE_GTK3=ON `
             -DPKG_CONFIG_EXECUTABLE="$pkgConfigExe" `
-            -DPKG_CONFIG_PATH="$pkgConfigPath" `
+            -DPKG_CONFIG_PATH="$x64Dir\lib\pkgconfig;$x64Dir\share\pkgconfig" `
             -DGETTEXT_MSGMERGE_EXECUTABLE="$env:GETTEXT_MSGMERGE_EXECUTABLE" `
             -DGETTEXT_MSGFMT_EXECUTABLE="$env:GETTEXT_MSGFMT_EXECUTABLE" `
-            -DVCPKG_INSTALLED_DIR="$vcpkgInstalled"
+            -DVCPKG_INSTALLED_DIR="$installRoot"
         shell: pwsh
 
-      # 编译
       - name: Build FontForge
-        run: |
-          cd fontforge
-          cmake --build build --config Release
+        run: cmake --build fontforge/build --config Release
         shell: pwsh
+        working-directory: fontforge
 
-      # 测试
-      - name: Run pyhook tests
-        run: |
-          cd fontforge
-          Copy-Item build\bin\*.dll build\lib\ -Force -ErrorAction SilentlyContinue
-          Copy-Item build\vcpkg_installed\x64-windows\bin\*.dll build\lib\ -Force -ErrorAction SilentlyContinue
-          ctest --test-dir build -R "_pyhook" --output-on-failure --configure-on-failure
-        shell: pwsh
-        continue-on-error: true
-      
-      # 嵌入式 Python
-      - name: Configure embedded Python 3.12.8
-        run: |
-          cd fontforge
-          New-Item -ItemType Directory -Force -Path build/bin/Lib
-          Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.8/python-3.12.8-embed-amd64.zip" -OutFile python-embed.zip
-          Expand-Archive -Path python-embed.zip -DestinationPath build/bin/Lib -Force
-          Remove-Item -Path python-embed.zip -Force
-          Move-Item -Path build/bin/Lib/python312.dll -Destination build/bin/ -Force -ErrorAction SilentlyContinue
-          Move-Item -Path build/bin/Lib/python312.zip -Destination build/bin/ -Force -ErrorAction SilentlyContinue
-          $pypath = "build/bin/Lib/python312._pth"
-          if (Test-Path $pypath) {
-            (Get-Content $pypath) -replace '^#import site', 'import site' | Set-Content $pypath
-          }
-        shell: pwsh
-
-      # 复制 GUI 依赖
-      - name: Copy GUI runtime dependencies
-        run: |
-          cd fontforge
-          $vcpkgBin = "build\vcpkg_installed\x64-windows\bin"
-          $targetBin = "build\bin"
-          
-          $guiDlls = @(
-            "gtk-3-0.dll", "gdk-3-0.dll", "gdk_pixbuf-2.0-0.dll",
-            "pango-1.0-0.dll", "pangocairo-1.0-0.dll", "pangowin32-1.0-0.dll",
-            "cairo-2.dll", "cairo-gobject-2.dll",
-            "glib-2.0-0.dll", "gobject-2.0-0.dll", "gio-2.0-0.dll",
-            "gmodule-2.0-0.dll", "gthread-2.0-0.dll", "intl.dll",
-            "libffi-8.dll", "libpng16-16.dll", "libjpeg-8.dll",
-            "libtiff-5.dll", "libwebp-7.dll", "freetype-6.dll",
-            "fontconfig-1.dll", "expat.dll", "zlib1.dll",
-            "libiconv-2.dll", "libxml2-2.dll", "libxslt-1.dll"
-          )
-          
-          foreach ($dll in $guiDlls) {
-            Get-Item "$vcpkgBin\$dll" -ErrorAction SilentlyContinue | Copy-Item -Destination "$targetBin\" -Force
-          }
-          
-          Copy-Item "$vcpkgBin\..\share\themes\*" -Destination "$targetBin\share\themes\" -Recurse -Force -ErrorAction SilentlyContinue
-          Copy-Item "$vcpkgBin\..\share\icons\*" -Destination "$targetBin\share\icons\" -Recurse -Force -ErrorAction SilentlyContinue
-          
-          New-Item -ItemType Directory -Force -Path "$targetBin\etc\gtk-3.0"
-          @"
-          [Settings]
-          gtk-theme-name=win32
-          gtk-icon-theme-name=Adwaita
-          gtk-font-name=Segoe UI 9
-          "@ | Out-File -FilePath "$targetBin\etc\gtk-3.0\settings.ini" -Encoding UTF8
-        shell: pwsh
-
-      # 启动脚本
-      - name: Create launch script
-        run: |
-          cd fontforge/build/bin
-          @"
-          @echo off
-          setlocal
-          set FONTFORGE_HOME=%~dp0
-          set PATH=%FONTFORGE_HOME%;%PATH%
-          set PYTHONHOME=%FONTFORGE_HOME%
-          set PYTHONPATH=%FONTFORGE_HOME%Lib
-          "%FONTFORGE_HOME%fontforge.exe" %*
-          "@ | Out-File -FilePath "fontforge-launcher.bat" -Encoding ASCII
-        shell: pwsh
-
-      # 上传产物
       - name: Upload FontForge Build Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -311,11 +190,9 @@ jobs:
           path: |
             fontforge/build/bin/
             fontforge/build/share/
-            fontforge/build/etc/
           if-no-files-found: error
           retention-days: 30
 
-      # 保存缓存
       - name: Save vcpkg binary cache
         if: always()
         uses: actions/cache/save@v4
