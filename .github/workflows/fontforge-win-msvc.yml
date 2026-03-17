@@ -1,4 +1,4 @@
-name: Build FontForge with MSVC for Windows (WITH GUI + NLS)
+name: Build FontForge (Manifest Mode + MSVC)
 
 on:
   push:
@@ -14,56 +14,40 @@ jobs:
       VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-cache,readwrite"
     
     steps:
-      - name: Checkout FontForge official source
+      - name: Checkout FontForge
         uses: actions/checkout@v4
         with:
           repository: fontforge/fontforge
           ref: master
           path: fontforge
 
-      - name: Restore vcpkg binary cache
-        id: vcpkg-cache
+      - name: Restore vcpkg cache
         uses: actions/cache/restore@v4
         with:
           path: vcpkg-cache
           key: vcpkg-files-${{ runner.os }}-${{ hashFiles('fontforge/vcpkg.json') }}
           restore-keys: |
             vcpkg-files-${{ runner.os }}-
-      
-      - name: Create vcpkg cache directory
+
+      - name: Create cache dir
         run: New-Item -ItemType Directory -Force -Path vcpkg-cache
 
-      - name: Setup vcpkg manually
+      - name: Setup vcpkg
         run: |
-          git clone https://github.com/microsoft/vcpkg.git
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git
           cd vcpkg
           .\bootstrap-vcpkg.bat -disableMetrics
           
           $vcpkgRoot = "$env:GITHUB_WORKSPACE\vcpkg"
-          "VCPKG_ROOT=$vcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
-          "VCPKG_DEFAULT_TRIPLET=x64-windows" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
+          echo "VCPKG_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
+          echo "VCPKG_DEFAULT_TRIPLET=x64-windows" >> $env:GITHUB_ENV
         shell: pwsh
 
-      # 🔥 使用 MSYS2 的 pkg-config（更可靠）
-      - name: Install MSYS2 and pkg-config
-        run: |
-          & "C:\msys64\usr\bin\bash.exe" -lc "pacman -S --noconfirm mingw-w64-x86_64-pkgconf"
-          $pkgConfigExe = "C:\msys64\mingw64\bin\pkgconf.exe"
-          if (Test-Path $pkgConfigExe) {
-            Write-Host "✓ MSYS2 pkgconf found: $pkgConfigExe"
-            & $pkgConfigExe --version
-            $pkgConfigExe | Out-File -FilePath "$env:GITHUB_WORKSPACE\pkgconf-path.txt" -Encoding UTF8
-          } else {
-            Write-Host "::error::MSYS2 pkgconf not found!"
-            exit 1
-          }
-        shell: pwsh
-
-      - name: Install Gettext tools from MSYS2
+      - name: Install Gettext (MSYS2)
         run: |
           & "C:\msys64\usr\bin\bash.exe" -lc "pacman -S --noconfirm mingw-w64-x86_64-gettext"
-          "GETTEXT_MSGMERGE_EXECUTABLE=C:\msys64\mingw64\bin\msgmerge.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
-          "GETTEXT_MSGFMT_EXECUTABLE=C:\msys64\mingw64\bin\msgfmt.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
+          echo "GETTEXT_MSGMERGE_EXECUTABLE=C:\msys64\mingw64\bin\msgmerge.exe" >> $env:GITHUB_ENV
+          echo "GETTEXT_MSGFMT_EXECUTABLE=C:\msys64\mingw64\bin\msgfmt.exe" >> $env:GITHUB_ENV
         shell: pwsh
 
       - name: Setup MSVC
@@ -76,65 +60,81 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Get Python executable path
-        run: |
-          $pythonExe = (Get-Command python).Source
-          "PYTHON_EXECUTABLE=$pythonExe" | Out-File -FilePath $env:GITHUB_ENV -Encoding UTF8 -Append
-        shell: pwsh
-
-      # 🔥 安装所有依赖
-      - name: Install vcpkg dependencies
+      # 🔥 核心步骤：配置 CMake 触发 Manifest Mode 安装
+      # 我们不在这里显式运行 "vcpkg install"，而是让 CMake 工具链文件自动处理
+      - name: Configure CMake (Triggers Manifest Install)
+        id: configure
         run: |
           $vcpkgRoot = "$env:GITHUB_WORKSPACE\vcpkg"
-          $installRoot = "$env:GITHUB_WORKSPACE\fontforge\build\vcpkg_installed"
-          $fontforgeDir = "$env:GITHUB_WORKSPACE\fontforge"
-          
-          New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
-          
-          Write-Host "=== Installing FontForge dependencies (manifest mode) ==="
-          & "$vcpkgRoot\vcpkg.exe" install `
-            --x-install-root="$installRoot" `
-            --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite" `
-            --x-manifest-root="$fontforgeDir"
-          
-          # 保存 pkg-config 路径
-          $libPkgConfig = "$installRoot\x64-windows\lib\pkgconfig"
-          $sharePkgConfig = "$installRoot\x64-windows\share\pkgconfig"
-          $pkgConfigPath = "$libPkgConfig;$sharePkgConfig"
-          Write-Host "PKG_CONFIG_PATH: $pkgConfigPath"
-          $pkgConfigPath | Out-File -FilePath "$env:GITHUB_WORKSPACE\pkgconfig-path.txt" -Encoding UTF8
-          
-          Write-Host "`n=== Listing .pc files ==="
-          Get-ChildItem -Path "$installRoot\x64-windows\lib\pkgconfig" -Filter "*.pc" -ErrorAction SilentlyContinue | 
-            ForEach-Object { Write-Host "  $($_.Name)" }
-        shell: pwsh
-
-      # 🔥 CMake 配置
-      - name: Configure CMake
-        run: |
-          $vcpkgRoot = "$env:GITHUB_WORKSPACE\vcpkg"
-          $installRoot = "$env:GITHUB_WORKSPACE\fontforge\build\vcpkg_installed"
           $fontforgeDir = "$env:GITHUB_WORKSPACE\fontforge"
           $buildDir = "$fontforgeDir\build"
+          $pythonExe = (Get-Command python).Source
           
-          $pkgConfigExe = Get-Content "$env:GITHUB_WORKSPACE\pkgconf-path.txt"
-          $pkgConfigPath = Get-Content "$env:GITHUB_WORKSPACE\pkgconfig-path.txt"
+          Write-Host "=== Starting CMake Configuration (Manifest Mode) ==="
+          Write-Host "Source: $fontforgeDir"
+          Write-Host "Build: $buildDir"
           
-          Write-Host "=== Configuration ==="
-          Write-Host "VCPKG_ROOT: $vcpkgRoot"
-          Write-Host "INSTALL_ROOT: $installRoot"
-          Write-Host "PKG_CONFIG_EXECUTABLE: $pkgConfigExe"
-          Write-Host "PKG_CONFIG_PATH: $pkgConfigPath"
+          # 第一次运行 CMake 会触发 vcpkg 安装依赖
+          # 我们故意先让它失败，以便捕获 pkgconf 的路径，或者尝试直接配置
+          # 但为了稳健，我们先手动触发一次 manifest 安装以确保包到位
           
-          # 添加 MSYS2 bin 到 PATH
-          $env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
+          Write-Host "`n=== Pre-installing dependencies via Manifest Mode ==="
+          & "$vcpkgRoot\vcpkg.exe" install `
+            --x-manifest-root="$fontforgeDir" `
+            --x-install-root="$fontforgeDir\build\vcpkg_installed" `
+            --binarysource="files,$env:GITHUB_WORKSPACE\vcpkg-cache,readwrite"
           
-          # 验证 pkgconf
-          Write-Host "`n=== Testing pkgconf ==="
-          & $pkgConfigExe --version
+          Write-Host "`n=== Locating pkgconf.exe ==="
+          $installedDir = "$fontforgeDir\build\vcpkg_installed\x64-windows"
+          $pkgconfExe = "$installedDir\tools\pkgconf\pkgconf.exe"
           
-          $pythonExe = $env:PYTHON_EXECUTABLE
+          if (-not (Test-Path $pkgconfExe)) {
+            # 尝试递归查找
+            $found = Get-ChildItem -Path "$fontforgeDir\build\vcpkg_installed" -Recurse -Filter "pkgconf.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) {
+              $pkgconfExe = $found.FullName
+              Write-Host "Found pkgconf.exe at: $pkgconfExe"
+            } else {
+              Write-Host "::error::pkgconf.exe not found in vcpkg installed directory!"
+              exit 1
+            }
+          } else {
+            Write-Host "Found pkgconf.exe at: $pkgconfExe"
+          }
           
+          # 🔥 关键修复：验证 pkgconf 是否能运行
+          # 如果直接运行失败，通常是因为缺少 PATH 中的依赖 DLL
+          $pkgconfDir = Split-Path $pkgconfExe -Parent
+          $binDir = "$installedDir\bin"
+          
+          # 临时更新 PATH 以包含 pkgconf 目录和 bin 目录
+          $oldPath = $env:PATH
+          $env:PATH = "$pkgconfDir;$binDir;$env:PATH"
+          
+          Write-Host "`n=== Testing pkgconf execution ==="
+          try {
+            $version = & $pkgconfExe --version
+            Write-Host "pkgconf version: $version"
+            Write-Host "✓ pkgconf is executable!"
+          } catch {
+            Write-Host "::error::Failed to execute pkgconf.exe. Error: $_"
+            Write-Host "Current PATH includes: $pkgconfDir"
+            exit 1
+          }
+          
+          # 恢复 PATH (稍后在 cmake 命令中会再次设置)
+          $env:PATH = $oldPath
+          
+          # 保存变量供下一步使用
+          $pkgconfExe | Out-File -FilePath "$env:GITHUB_WORKSPACE\pkgconf_path.txt" -Encoding UTF8
+          $pkgconfDir | Out-File -FilePath "$env:GITHUB_WORKSPACE\pkgconf_dir.txt" -Encoding UTF8
+          $binDir | Out-File -FilePath "$env:GITHUB_WORKSPACE\bin_dir.txt" -Encoding UTF8
+          
+          # 设置 PKG_CONFIG_PATH
+          $pcPath = "$installedDir\lib\pkgconfig;$installedDir\share\pkgconfig"
+          $pcPath | Out-File -FilePath "$env:GITHUB_WORKSPACE\pkgconfig_path.txt" -Encoding UTF8
+          
+          Write-Host "`n=== Running CMake Configure ==="
           cmake -S "$fontforgeDir" -B "$buildDir" `
             -G "Ninja" `
             -DCMAKE_TOOLCHAIN_FILE="$vcpkgRoot/scripts/buildsystems/vcpkg.cmake" `
@@ -149,29 +149,36 @@ jobs:
             -DENABLE_NLS=ON `
             -DBUILD_SHARED_LIBS=ON `
             -DUSE_GTK3=ON `
-            -DPKG_CONFIG_EXECUTABLE="$pkgConfigExe" `
-            -DPKG_CONFIG_PATH="$pkgConfigPath" `
+            -DPKG_CONFIG_EXECUTABLE="$pkgconfExe" `
+            -DPKG_CONFIG_PATH="$pcPath" `
             -DGETTEXT_MSGMERGE_EXECUTABLE="$env:GETTEXT_MSGMERGE_EXECUTABLE" `
             -DGETTEXT_MSGFMT_EXECUTABLE="$env:GETTEXT_MSGFMT_EXECUTABLE" `
-            -DVCPKG_INSTALLED_DIR="$installRoot"
+            -DVCPKG_INSTALLED_DIR="$fontforgeDir\build\vcpkg_installed"
+            
         shell: pwsh
 
       - name: Build FontForge
-        run: cmake --build build --config Release
+        run: |
+          # 构建时需要确保 PATH 包含 pkgconf 依赖
+          $pkgconfDir = Get-Content "$env:GITHUB_WORKSPACE\pkgconf_dir.txt"
+          $binDir = Get-Content "$env:GITHUB_WORKSPACE\bin_dir.txt"
+          $env:PATH = "$pkgconfDir;$binDir;$env:PATH"
+          
+          cmake --build fontforge/build --config Release
         shell: pwsh
-        working-directory: fontforge
+        working-directory: .
 
-      - name: Upload FontForge Build Artifacts
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: FontForge-Windows-MSVC-GUI-NLS-Build
+          name: FontForge-Windows-MSVC-Manifest
           path: |
             fontforge/build/bin/
             fontforge/build/share/
           if-no-files-found: error
           retention-days: 30
 
-      - name: Save vcpkg binary cache
+      - name: Save vcpkg cache
         if: always()
         uses: actions/cache/save@v4
         with:
