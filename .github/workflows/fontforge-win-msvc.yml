@@ -170,7 +170,8 @@ jobs:
           
           $pythonExe = $env:PYTHON_EXECUTABLE
           
-          cmake -B fontforge/build `
+          # ✅ 修复关键：添加 -S fontforge 指定源目录
+          cmake -S fontforge -B fontforge/build `
             -G "Ninja" `
             -DCMAKE_TOOLCHAIN_FILE="$vcpkgRoot/scripts/buildsystems/vcpkg.cmake" `
             -DCMAKE_BUILD_TYPE=Release `
